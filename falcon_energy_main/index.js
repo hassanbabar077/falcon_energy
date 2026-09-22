@@ -1,0 +1,51 @@
+import dotenv from 'dotenv';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import express from 'express';
+import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import { createPool, ensureSeedState, initializeDatabase, readState, verifyUser, writeState } from './db.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, './.env') });
+
+// DB_PASSWORD may intentionally be blank in a default local XAMPP setup.
+const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'JWT_SECRET'];
+const missing = required.filter(key => !process.env[key]);
+if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}. Copy .env.example to .env first.`);
+
+const app = express();
+const pool = createPool(process.env);
+const port = Number(process.env.PORT || 3001);
+const origin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+app.use(cors({ origin, credentials: true }));
+app.use(express.json({ limit: '20mb' }));
+
+const authenticate = (req, res, next) => {
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  try { req.user = jwt.verify(token, process.env.JWT_SECRET); next(); }
+  catch { res.status(401).json({ error: 'Authentication required.' }); }
+};
+
+app.get('/api/health', async (_req, res, next) => { try { await pool.query('SELECT 1'); res.json({ status: 'ok' }); } catch (error) { next(error); } });
+app.get('/api/state', authenticate, async (_req, res, next) => { try { res.json({ state: await readState(pool) }); } catch (error) { next(error); } });
+app.post('/api/auth/login', async (req, res, next) => {
+  try {
+    const user = await verifyUser(pool, req.body.username || '', req.body.password || '');
+    if (!user) return res.status(401).json({ error: 'Invalid username or password, or account is inactive.' });
+    const token = jwt.sign({ id: user.id, role: user.role, permissions: user.permissions }, process.env.JWT_SECRET, { expiresIn: '2h' });
+    res.json({ user, token });
+  } catch (error) { next(error); }
+});
+app.put('/api/state', authenticate, async (req, res, next) => {
+  try {
+    if (!req.body?.state || typeof req.body.state !== 'object') return res.status(400).json({ error: 'A valid state object is required.' });
+    await writeState(pool, req.body.state);
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+app.use((error, _req, res, _next) => { console.error('API Error:', error); res.status(500).json({ error: error.message || 'The server could not complete the request.' }); });
+
+await initializeDatabase(pool);
+await ensureSeedState(pool);
+app.listen(port, () => console.log(`Noor Transport API listening on port ${port}`));
