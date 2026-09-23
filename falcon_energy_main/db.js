@@ -1,5 +1,7 @@
-import mysql from 'mysql2/promise';
+import pg from 'pg';
 import bcrypt from 'bcryptjs';
+
+const { Pool } = pg;
 
 export const emptyState = () => ({
   company_info: { id: 1, name: 'Falcon Energy', system_name: 'LPG Transport Management System', address: 'Lahore, Pakistan', contact: '0300-8462849', email: 'info@falconenergy.com', backup_path: 'C:\\NoorTransport\\Backup\\', last_reset: new Date().toISOString().slice(0, 10) },
@@ -30,7 +32,20 @@ export const emptyState = () => ({
 });
 
 export function createPool(config) {
-  return mysql.createPool({ host: config.DB_HOST, port: Number(config.DB_PORT || 3306), user: config.DB_USER, password: config.DB_PASSWORD, database: config.DB_NAME, waitForConnections: true, connectionLimit: 10 });
+  if (config.DATABASE_URL) {
+    return new Pool({
+      connectionString: config.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    });
+  }
+  return new Pool({
+    host: config.DB_HOST || 'localhost',
+    port: Number(config.DB_PORT || 5432),
+    user: config.DB_USER || 'postgres',
+    password: config.DB_PASSWORD || '',
+    database: config.DB_NAME || 'falcon_energy',
+    max: 10
+  });
 }
 
 export const TABLE_COLUMNS = {
@@ -77,15 +92,15 @@ export const TABLE_SCHEMAS = {
     email VARCHAR(191),
     backup_path VARCHAR(255),
     last_reset VARCHAR(50),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    raw_data JSONB
+  )`,
 
   lookup_tables: `CREATE TABLE IF NOT EXISTS lookup_tables (
-    id INT AUTO_INCREMENT PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     category VARCHAR(191) NOT NULL,
-    options JSON,
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    options JSONB,
+    raw_data JSONB
+  )`,
 
   users: `CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(191) PRIMARY KEY,
@@ -94,10 +109,10 @@ export const TABLE_SCHEMAS = {
     name VARCHAR(191),
     role VARCHAR(100),
     status VARCHAR(50),
-    permissions JSON,
-    createdAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    permissions JSONB,
+    "createdAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   vehicles: `CREATE TABLE IF NOT EXISTS vehicles (
     id VARCHAR(191) PRIMARY KEY,
@@ -115,10 +130,10 @@ export const TABLE_SCHEMAS = {
     status VARCHAR(50),
     assigned_driver VARCHAR(191),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   transporters: `CREATE TABLE IF NOT EXISTS transporters (
     id VARCHAR(191) PRIMARY KEY,
@@ -131,10 +146,10 @@ export const TABLE_SCHEMAS = {
     cnic VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   loading_sources: `CREATE TABLE IF NOT EXISTS loading_sources (
     id VARCHAR(191) PRIMARY KEY,
@@ -145,10 +160,10 @@ export const TABLE_SCHEMAS = {
     phone VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   destinations: `CREATE TABLE IF NOT EXISTS destinations (
     id VARCHAR(191) PRIMARY KEY,
@@ -158,10 +173,10 @@ export const TABLE_SCHEMAS = {
     distance_km DECIMAL(10,2),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   customers: `CREATE TABLE IF NOT EXISTS customers (
     id VARCHAR(191) PRIMARY KEY,
@@ -175,10 +190,10 @@ export const TABLE_SCHEMAS = {
     strn VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   drivers: `CREATE TABLE IF NOT EXISTS drivers (
     id VARCHAR(191) PRIMARY KEY,
@@ -194,10 +209,10 @@ export const TABLE_SCHEMAS = {
     status VARCHAR(50),
     address TEXT,
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   vendors: `CREATE TABLE IF NOT EXISTS vendors (
     id VARCHAR(191) PRIMARY KEY,
@@ -210,10 +225,10 @@ export const TABLE_SCHEMAS = {
     ntn VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   trips: `CREATE TABLE IF NOT EXISTS trips (
     id VARCHAR(191) PRIMARY KEY,
@@ -246,10 +261,10 @@ export const TABLE_SCHEMAS = {
     payment_status VARCHAR(50),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   fines: `CREATE TABLE IF NOT EXISTS fines (
     id VARCHAR(191) PRIMARY KEY,
@@ -263,10 +278,10 @@ export const TABLE_SCHEMAS = {
     paid_by VARCHAR(191),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   workshops: `CREATE TABLE IF NOT EXISTS workshops (
     id VARCHAR(191) PRIMARY KEY,
@@ -278,10 +293,10 @@ export const TABLE_SCHEMAS = {
     specialization VARCHAR(191),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   maintenance_heads: `CREATE TABLE IF NOT EXISTS maintenance_heads (
     id VARCHAR(191) PRIMARY KEY,
@@ -290,10 +305,10 @@ export const TABLE_SCHEMAS = {
     category VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   maintenance: `CREATE TABLE IF NOT EXISTS maintenance (
     id VARCHAR(191) PRIMARY KEY,
@@ -313,10 +328,10 @@ export const TABLE_SCHEMAS = {
     payment_status VARCHAR(50),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   document_register: `CREATE TABLE IF NOT EXISTS document_register (
     id VARCHAR(191) PRIMARY KEY,
@@ -329,10 +344,10 @@ export const TABLE_SCHEMAS = {
     cost DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   tyre_brands: `CREATE TABLE IF NOT EXISTS tyre_brands (
     id VARCHAR(191) PRIMARY KEY,
@@ -342,10 +357,10 @@ export const TABLE_SCHEMAS = {
     origin VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   tyres_record: `CREATE TABLE IF NOT EXISTS tyres_record (
     id VARCHAR(191) PRIMARY KEY,
@@ -364,10 +379,10 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     meter_reading VARCHAR(100),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   fuel_pumps: `CREATE TABLE IF NOT EXISTS fuel_pumps (
     id VARCHAR(191) PRIMARY KEY,
@@ -379,10 +394,10 @@ export const TABLE_SCHEMAS = {
     payment_type VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   fuel_entries: `CREATE TABLE IF NOT EXISTS fuel_entries (
     id VARCHAR(191) PRIMARY KEY,
@@ -400,10 +415,10 @@ export const TABLE_SCHEMAS = {
     meter_reading VARCHAR(100),
     receipt_no VARCHAR(100),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   engine_oil_defination: `CREATE TABLE IF NOT EXISTS engine_oil_defination (
     id VARCHAR(191) PRIMARY KEY,
@@ -417,10 +432,10 @@ export const TABLE_SCHEMAS = {
     price DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   engine_oil_purchase: `CREATE TABLE IF NOT EXISTS engine_oil_purchase (
     id VARCHAR(191) PRIMARY KEY,
@@ -434,10 +449,10 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     invoice_no VARCHAR(100),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   engine_oil_usage: `CREATE TABLE IF NOT EXISTS engine_oil_usage (
     id VARCHAR(191) PRIMARY KEY,
@@ -448,10 +463,10 @@ export const TABLE_SCHEMAS = {
     quantity DECIMAL(12,2),
     meter_reading VARCHAR(100),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   bank_accounts: `CREATE TABLE IF NOT EXISTS bank_accounts (
     id VARCHAR(191) PRIMARY KEY,
@@ -465,10 +480,10 @@ export const TABLE_SCHEMAS = {
     current_balance DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   bank_transactions: `CREATE TABLE IF NOT EXISTS bank_transactions (
     id VARCHAR(191) PRIMARY KEY,
@@ -482,10 +497,10 @@ export const TABLE_SCHEMAS = {
     cheque_no VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   payments: `CREATE TABLE IF NOT EXISTS payments (
     id VARCHAR(191) PRIMARY KEY,
@@ -504,10 +519,10 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     remarks TEXT,
     status VARCHAR(50),
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   general_ledger: `CREATE TABLE IF NOT EXISTS general_ledger (
     id VARCHAR(191) PRIMARY KEY,
@@ -521,10 +536,10 @@ export const TABLE_SCHEMAS = {
     credit DECIMAL(12,2),
     balance DECIMAL(12,2),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   cash_payments: `CREATE TABLE IF NOT EXISTS cash_payments (
     id VARCHAR(191) PRIMARY KEY,
@@ -539,10 +554,10 @@ export const TABLE_SCHEMAS = {
     amount DECIMAL(12,2),
     bank VARCHAR(191),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   bills_register: `CREATE TABLE IF NOT EXISTS bills_register (
     id VARCHAR(191) PRIMARY KEY,
@@ -557,10 +572,10 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   payments_received: `CREATE TABLE IF NOT EXISTS payments_received (
     id VARCHAR(191) PRIMARY KEY,
@@ -573,10 +588,10 @@ export const TABLE_SCHEMAS = {
     cheque_no VARCHAR(100),
     amount DECIMAL(12,2),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
 
   payment_history: `CREATE TABLE IF NOT EXISTS payment_history (
     id VARCHAR(191) PRIMARY KEY,
@@ -586,14 +601,13 @@ export const TABLE_SCHEMAS = {
     type_val VARCHAR(100),
     reference VARCHAR(191),
     remarks TEXT,
-    createdAt VARCHAR(100),
-    updatedAt VARCHAR(100),
-    raw_data JSON
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`
 };
 
 export async function initializeDatabase(pool) {
-  // Drop legacy single table if it exists
   await pool.query(`DROP TABLE IF EXISTS app_records`);
 
   for (const [tableName, sql] of Object.entries(TABLE_SCHEMAS)) {
@@ -603,12 +617,14 @@ export async function initializeDatabase(pool) {
 
 export async function resetDatabase(pool) {
   await pool.query(`DROP TABLE IF EXISTS app_records`);
-  for (const [tableName, sql] of Object.entries(TABLE_SCHEMAS)) {
+  for (const [tableName] of Object.entries(TABLE_SCHEMAS)) {
     try {
-      await pool.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+      await pool.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
     } catch (e) {
-      // Ignore drop errors if table doesn't exist
+      // Ignore drop errors
     }
+  }
+  for (const [tableName, sql] of Object.entries(TABLE_SCHEMAS)) {
     await pool.query(sql);
   }
 }
@@ -635,7 +651,8 @@ export async function readState(pool) {
 
   for (const table of tables) {
     try {
-      const [rows] = await pool.query(`SELECT * FROM \`${table}\``);
+      const result = await pool.query(`SELECT * FROM "${table}"`);
+      const rows = result.rows || [];
       if (rows.length > 0) hasAnyData = true;
 
       if (table === 'company_info') {
@@ -677,8 +694,16 @@ function mapEntityRow(table, record, fallbackId = '1') {
   return row;
 }
 
+function insertRowQuery(tableName, row) {
+  const keys = Object.keys(row);
+  const cols = keys.map(k => `"${k}"`).join(', ');
+  const values = keys.map((_, i) => `$${i + 1}`).join(', ');
+  const queryText = `INSERT INTO "${tableName}" (${cols}) VALUES (${values})`;
+  const params = keys.map(k => row[k]);
+  return { queryText, params };
+}
+
 export async function writeState(pool, state) {
-  // Ensure all user passwords are stored in bcrypt hashed format
   if (state.users && Array.isArray(state.users)) {
     for (const u of state.users) {
       if (u.password && typeof u.password === 'string' && !u.password.startsWith('$2')) {
@@ -687,30 +712,32 @@ export async function writeState(pool, state) {
     }
   }
 
-  const connection = await pool.getConnection();
+  const connection = await pool.connect();
   try {
-    await connection.beginTransaction();
+    await connection.query('BEGIN');
 
     for (const [entity, value] of Object.entries(state)) {
       if (!TABLE_SCHEMAS[entity]) continue;
 
-      await connection.query(`DELETE FROM \`${entity}\``);
+      await connection.query(`DELETE FROM "${entity}"`);
 
       if (entity === 'company_info' && value && typeof value === 'object') {
         const row = mapEntityRow(entity, value, '1');
-        await connection.query(`INSERT INTO \`${entity}\` SET ?`, [row]);
+        const { queryText, params } = insertRowQuery(entity, row);
+        await connection.query(queryText, params);
       } else if (Array.isArray(value) && value.length > 0) {
         for (let idx = 0; idx < value.length; idx++) {
           const item = value[idx];
           const row = mapEntityRow(entity, item, String(idx + 1));
-          await connection.query(`INSERT INTO \`${entity}\` SET ?`, [row]);
+          const { queryText, params } = insertRowQuery(entity, row);
+          await connection.query(queryText, params);
         }
       }
     }
 
-    await connection.commit();
+    await connection.query('COMMIT');
   } catch (error) {
-    await connection.rollback();
+    await connection.query('ROLLBACK');
     throw error;
   } finally {
     connection.release();

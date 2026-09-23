@@ -9,6 +9,6 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 const pool = createPool(process.env);
 await resetDatabase(pool);
 await ensureSeedState(pool);
-console.log('MySQL schema with 31 separate tables is ready and seeded.');
+console.log('PostgreSQL schema with 31 separate tables is ready and seeded.');
 await pool.end();
 
