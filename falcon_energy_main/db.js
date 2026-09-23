@@ -28,6 +28,8 @@ export const emptyState = () => ({
     { category: 'Tyre Brand Category', options: ['Local', 'Imported'] }
   ],
   vehicles: [], transporters: [], loading_sources: [], destinations: [], customers: [], drivers: [], vendors: [], trips: [], fines: [], workshops: [], maintenance_heads: [], maintenance: [], document_register: [], tyre_brands: [], tyres_record: [], fuel_pumps: [], fuel_entries: [], engine_oil_defination: [], engine_oil_purchase: [], engine_oil_usage: [], bank_accounts: [], bank_transactions: [], payments: [], general_ledger: [], cash_payments: [], bills_register: [], payments_received: [], payment_history: [],
+  vehicle_categories: [],
+  tanker_ownerships: [],
   users: [{ id: 'USR-001', username: 'admin', password: bcrypt.hashSync('admin123', 10), name: 'System Administrator', role: 'Admin', status: 'Active', permissions: ['all'], createdAt: new Date().toISOString() }]
 });
 
@@ -51,6 +53,8 @@ export function createPool(config) {
 export const TABLE_COLUMNS = {
   company_info: ['id', 'name', 'system_name', 'address', 'contact', 'email', 'backup_path', 'last_reset'],
   lookup_tables: ['id', 'category', 'options'],
+  vehicle_categories: ['id', 'code', 'name', 'status', 'description', 'createdAt', 'updatedAt'],
+  tanker_ownerships: ['id', 'code', 'name', 'status', 'description', 'createdAt', 'updatedAt'],
   users: ['id', 'username', 'password', 'name', 'role', 'status', 'permissions', 'createdAt'],
   vehicles: ['id', 'code', 'number', 'transporter', 'category', 'type', 'rent_type', 'ownership', 'capacity', 'engine_no', 'chassis_no', 'model', 'status', 'assigned_driver', 'remarks', 'createdAt', 'updatedAt'],
   transporters: ['id', 'code', 'name', 'contact_person', 'phone', 'email', 'address', 'cnic', 'status', 'remarks', 'createdAt', 'updatedAt'],
@@ -96,9 +100,31 @@ export const TABLE_SCHEMAS = {
   )`,
 
   lookup_tables: `CREATE TABLE IF NOT EXISTS lookup_tables (
-    id SERIAL PRIMARY KEY,
+    id VARCHAR(191) PRIMARY KEY,
     category VARCHAR(191) NOT NULL,
     options JSONB,
+    raw_data JSONB
+  )`,
+
+  vehicle_categories: `CREATE TABLE IF NOT EXISTS vehicle_categories (
+    id VARCHAR(191) PRIMARY KEY,
+    code VARCHAR(100),
+    name VARCHAR(191) NOT NULL,
+    status VARCHAR(50),
+    description TEXT,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
+    raw_data JSONB
+  )`,
+
+  tanker_ownerships: `CREATE TABLE IF NOT EXISTS tanker_ownerships (
+    id VARCHAR(191) PRIMARY KEY,
+    code VARCHAR(100),
+    name VARCHAR(191) NOT NULL,
+    status VARCHAR(50),
+    description TEXT,
+    "createdAt" VARCHAR(100),
+    "updatedAt" VARCHAR(100),
     raw_data JSONB
   )`,
 

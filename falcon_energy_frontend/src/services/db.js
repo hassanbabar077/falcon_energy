@@ -70,6 +70,18 @@ const INITIAL_DATA = {
   bills_register: [],
   payments_received: [],
   payment_history: [],
+  vehicle_categories: [
+    { id: 'CAT-001', code: 'CAT-001', name: 'Falcon Energy', status: 'Active', description: 'Falcon Energy fleet vehicles', createdAt: new Date().toISOString() },
+    { id: 'CAT-002', code: 'CAT-002', name: 'Rented', status: 'Active', description: 'Rented vehicles', createdAt: new Date().toISOString() },
+    { id: 'CAT-003', code: 'CAT-003', name: 'Open Market', status: 'Active', description: 'Open market vehicles', createdAt: new Date().toISOString() },
+    { id: 'CAT-004', code: 'CAT-004', name: 'Private', status: 'Active', description: 'Private vehicles', createdAt: new Date().toISOString() }
+  ],
+  tanker_ownerships: [
+    { id: 'TOW-001', code: 'TOW-001', name: 'Falcon Energy', status: 'Active', description: 'Falcon Energy owned tankers', createdAt: new Date().toISOString() },
+    { id: 'TOW-002', code: 'TOW-002', name: 'Private', status: 'Active', description: 'Privately owned tankers', createdAt: new Date().toISOString() },
+    { id: 'TOW-003', code: 'TOW-003', name: 'Rented', status: 'Active', description: 'Rented tankers', createdAt: new Date().toISOString() },
+    { id: 'TOW-004', code: 'TOW-004', name: 'Leased', status: 'Active', description: 'Leased tankers', createdAt: new Date().toISOString() }
+  ],
   users: [
     {
       id: 'USR-001',
@@ -484,16 +496,41 @@ class DatabaseService {
     return record;
   }
 
-  // Helper to fetch lookup options from lookup_tables by category
+  // Helper to fetch lookup options by category or dedicated table
   getLookupOptions(category) {
-    const lookups = this.getTable('lookup_tables');
-    const matches = lookups.filter(l => String(l.category).trim().toLowerCase() === String(category).trim().toLowerCase());
-    if (matches.length > 0) {
-      return matches.map(m => m.name || m.title || m.value).filter(Boolean);
+    if (category === 'Vehicle Category') {
+      const list = this.getTable('vehicle_categories');
+      if (list && list.length > 0) {
+        return list.filter(item => item.status === 'Active' || !item.status).map(item => item.name || item.code).filter(Boolean);
+      }
+      return ['Falcon Energy', 'Rented', 'Open Market', 'Private'];
     }
-    // Default fallbacks if no lookups registered yet
-    if (category === 'Vehicle Category') return ['Falcon Energy', 'Rented', 'Open Market', 'Private'];
-    if (category === 'Tanker Ownership') return ['Falcon Energy', 'Private', 'Rented', 'Leased'];
+
+    if (category === 'Tanker Ownership') {
+      const list = this.getTable('tanker_ownerships');
+      if (list && list.length > 0) {
+        return list.filter(item => item.status === 'Active' || !item.status).map(item => item.name || item.code).filter(Boolean);
+      }
+      return ['Falcon Energy', 'Private', 'Rented', 'Leased'];
+    }
+
+    const lookups = this.getTable('lookup_tables');
+    const matches = lookups.filter(l => l && l.category && String(l.category).trim().toLowerCase() === String(category).trim().toLowerCase());
+    const optionsSet = new Set();
+
+    matches.forEach(m => {
+      if (Array.isArray(m.options)) {
+        m.options.forEach(opt => opt && optionsSet.add(opt));
+      }
+      if (m.name || m.title || m.value) {
+        optionsSet.add(m.name || m.title || m.value);
+      }
+    });
+
+    if (optionsSet.size > 0) {
+      return Array.from(optionsSet);
+    }
+
     if (category === 'Engine Oil Defination') return ['Shell Rimula R4 15W-40', 'Mobil Delvac MX 15W-40', 'ZIC X3000 Diesel Oil', 'Caltex Delo 400'];
     return [];
   }

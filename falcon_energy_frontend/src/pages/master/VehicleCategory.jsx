@@ -6,8 +6,9 @@ const config = {
   title: 'Vehicle Category Master',
   icon: Tag,
   description: 'Manage custom vehicle categories (e.g. Falcon Energy, Rented, Open Market) used in vehicle forms.',
-  tableName: 'lookup_tables',
+  tableName: 'vehicle_categories',
   idField: 'id',
+  codeField: 'code',
   idPrefix: 'CAT-',
   columns: [
     { key: 'id', label: 'Category ID', format: 'bold' },
@@ -20,10 +21,7 @@ const config = {
     { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'], required: true, halfWidth: true },
     { key: 'description', label: 'Description', type: 'textarea', placeholder: 'Optional notes on category usage' }
   ],
-  defaultValues: { name: '', status: 'Active', description: '', category: 'Vehicle Category' },
-  onBeforeSave: (record) => {
-    record.category = 'Vehicle Category';
-  }
+  defaultValues: { name: '', status: 'Active', description: '' }
 };
 
 export function VehicleCategory() {

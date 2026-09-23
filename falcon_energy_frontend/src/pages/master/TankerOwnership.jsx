@@ -6,8 +6,9 @@ const config = {
   title: 'Tanker Ownership Master',
   icon: Building,
   description: 'Manage custom tanker ownership classifications (e.g. Falcon Energy, Private, Rented) used in vehicle forms.',
-  tableName: 'lookup_tables',
+  tableName: 'tanker_ownerships',
   idField: 'id',
+  codeField: 'code',
   idPrefix: 'TOW-',
   columns: [
     { key: 'id', label: 'Ownership ID', format: 'bold' },
@@ -20,10 +21,7 @@ const config = {
     { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'], required: true, halfWidth: true },
     { key: 'description', label: 'Description', type: 'textarea', placeholder: 'Optional details regarding ownership classification' }
   ],
-  defaultValues: { name: '', status: 'Active', description: '', category: 'Tanker Ownership' },
-  onBeforeSave: (record) => {
-    record.category = 'Tanker Ownership';
-  }
+  defaultValues: { name: '', status: 'Active', description: '' }
 };
 
 export function TankerOwnership() {

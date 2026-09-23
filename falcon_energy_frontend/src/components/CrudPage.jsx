@@ -259,9 +259,15 @@ export function CrudPage({ config }) {
   const [workshops, setWorkshops] = useState([]);
   const [trips, setTrips] = useState([]);
 
+  const categoryFilter = config.category || config.categoryFilter || defaultValues?.category;
+
   // Load records
   const loadMasterLists = () => {
-    setRecords(dbService.getTable(tableName));
+    let rawRecords = dbService.getTable(tableName);
+    if (categoryFilter) {
+      rawRecords = rawRecords.filter(r => r && r.category && String(r.category).trim().toLowerCase() === String(categoryFilter).trim().toLowerCase());
+    }
+    setRecords(rawRecords);
     setVehicles(dbService.getTable('vehicles'));
     setTransporters(dbService.getTable('transporters'));
     setFuelPumps(dbService.getTable('fuel_pumps'));
