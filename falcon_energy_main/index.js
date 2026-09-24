@@ -9,20 +9,22 @@ import { createPool, ensureSeedState, initializeDatabase, readState, verifyUser,
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
 
-// DB_PASSWORD may intentionally be blank in a default local XAMPP setup.
-const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'JWT_SECRET'];
-const missing = required.filter(key => !process.env[key]);
-if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}. Copy .env.example to .env first.`);
+const DB_HOST = process.env.DB_HOST || '127.0.0.1';
+const DB_PORT = Number(process.env.DB_PORT || 3306);
+const DB_NAME = process.env.DB_NAME || 'falconen_falcon_energy';
+const DB_USER = process.env.DB_USER || 'falconen_falconuser';
+const DB_PASSWORD = process.env.DB_PASSWORD !== undefined ? process.env.DB_PASSWORD : 'Hamza123@shahab';
+const JWT_SECRET = process.env.JWT_SECRET || 'falcon_energy_secure_jwt_secret_2026';
 
 const app = express();
-const pool = createPool(process.env);
+const pool = createPool({ DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD });
 const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 
 const authenticate = (req, res, next) => {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-  try { req.user = jwt.verify(token, process.env.JWT_SECRET); next(); }
+  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
   catch { res.status(401).json({ error: 'Authentication required.' }); }
 };
 
@@ -39,7 +41,7 @@ app.post('/api/auth/login', async (req, res, next) => {
   try {
     const user = await verifyUser(pool, req.body.username || '', req.body.password || '');
     if (!user) return res.status(401).json({ error: 'Invalid username or password, or account is inactive.' });
-    const token = jwt.sign({ id: user.id, role: user.role, permissions: user.permissions }, process.env.JWT_SECRET, { expiresIn: '2h' });
+    const token = jwt.sign({ id: user.id, role: user.role, permissions: user.permissions }, JWT_SECRET, { expiresIn: '2h' });
     res.json({ user, token });
   } catch (error) { next(error); }
 });
