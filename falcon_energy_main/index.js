@@ -26,7 +26,14 @@ const authenticate = (req, res, next) => {
   catch { res.status(401).json({ error: 'Authentication required.' }); }
 };
 
-app.get('/api/health', async (_req, res, next) => { try { await pool.query('SELECT 1'); res.json({ status: 'ok' }); } catch (error) { next(error); } });
+app.get('/api/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message, code: error.code });
+  }
+});
 app.get('/api/state', authenticate, async (_req, res, next) => { try { res.json({ state: await readState(pool) }); } catch (error) { next(error); } });
 app.post('/api/auth/login', async (req, res, next) => {
   try {
