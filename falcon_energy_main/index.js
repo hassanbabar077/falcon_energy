@@ -17,8 +17,7 @@ if (missing.length) throw new Error(`Missing required environment variables: ${m
 const app = express();
 const pool = createPool(process.env);
 const port = process.env.PORT || 3001;
-const origin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
-app.use(cors({ origin, credentials: true }));
+app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 
 const authenticate = (req, res, next) => {
