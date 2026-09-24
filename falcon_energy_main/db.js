@@ -1,7 +1,5 @@
-import pg from 'pg';
+import mysql from 'mysql2/promise';
 import bcrypt from 'bcryptjs';
-
-const { Pool } = pg;
 
 export const emptyState = () => ({
   company_info: { id: 1, name: 'Falcon Energy', system_name: 'LPG Transport Management System', address: 'Lahore, Pakistan', contact: '0300-8462849', email: 'info@falconenergy.com', backup_path: 'C:\\NoorTransport\\Backup\\', last_reset: new Date().toISOString().slice(0, 10) },
@@ -28,25 +26,31 @@ export const emptyState = () => ({
     { category: 'Tyre Brand Category', options: ['Local', 'Imported'] }
   ],
   vehicles: [], transporters: [], loading_sources: [], destinations: [], customers: [], drivers: [], vendors: [], trips: [], fines: [], workshops: [], maintenance_heads: [], maintenance: [], document_register: [], tyre_brands: [], tyres_record: [], fuel_pumps: [], fuel_entries: [], engine_oil_defination: [], engine_oil_purchase: [], engine_oil_usage: [], bank_accounts: [], bank_transactions: [], payments: [], general_ledger: [], cash_payments: [], bills_register: [], payments_received: [], payment_history: [],
-  vehicle_categories: [],
-  tanker_ownerships: [],
+  vehicle_categories: [
+    { id: 'CAT-001', code: 'CAT-001', name: 'Falcon Energy', status: 'Active', description: 'Falcon Energy fleet vehicles', createdAt: new Date().toISOString() },
+    { id: 'CAT-002', code: 'CAT-002', name: 'Rented', status: 'Active', description: 'Rented vehicles', createdAt: new Date().toISOString() },
+    { id: 'CAT-003', code: 'CAT-003', name: 'Open Market', status: 'Active', description: 'Open market vehicles', createdAt: new Date().toISOString() },
+    { id: 'CAT-004', code: 'CAT-004', name: 'Private', status: 'Active', description: 'Private vehicles', createdAt: new Date().toISOString() }
+  ],
+  tanker_ownerships: [
+    { id: 'TOW-001', code: 'TOW-001', name: 'Falcon Energy', status: 'Active', description: 'Falcon Energy owned tankers', createdAt: new Date().toISOString() },
+    { id: 'TOW-002', code: 'TOW-002', name: 'Private', status: 'Active', description: 'Privately owned tankers', createdAt: new Date().toISOString() },
+    { id: 'TOW-003', code: 'TOW-003', name: 'Rented', status: 'Active', description: 'Rented tankers', createdAt: new Date().toISOString() },
+    { id: 'TOW-004', code: 'TOW-004', name: 'Leased', status: 'Active', description: 'Leased tankers', createdAt: new Date().toISOString() }
+  ],
   users: [{ id: 'USR-001', username: 'admin', password: bcrypt.hashSync('admin123', 10), name: 'System Administrator', role: 'Admin', status: 'Active', permissions: ['all'], createdAt: new Date().toISOString() }]
 });
 
 export function createPool(config) {
-  if (config.DATABASE_URL) {
-    return new Pool({
-      connectionString: config.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-    });
-  }
-  return new Pool({
-    host: config.DB_HOST || 'localhost',
-    port: Number(config.DB_PORT || 5432),
-    user: config.DB_USER || 'postgres',
-    password: config.DB_PASSWORD || '',
+  return mysql.createPool({
+    host: config.DB_HOST || '127.0.0.1',
+    port: Number(config.DB_PORT || 3306),
+    user: config.DB_USER || 'root',
+    password: config.DB_PASSWORD !== undefined ? config.DB_PASSWORD : '',
     database: config.DB_NAME || 'falcon_energy',
-    max: 10
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
   });
 }
 
@@ -87,7 +91,7 @@ export const TABLE_COLUMNS = {
 };
 
 export const TABLE_SCHEMAS = {
-  company_info: `CREATE TABLE IF NOT EXISTS company_info (
+  company_info: `CREATE TABLE IF NOT EXISTS \`company_info\` (
     id INT PRIMARY KEY,
     name VARCHAR(191),
     system_name VARCHAR(191),
@@ -96,51 +100,51 @@ export const TABLE_SCHEMAS = {
     email VARCHAR(191),
     backup_path VARCHAR(255),
     last_reset VARCHAR(50),
-    raw_data JSONB
+    raw_data JSON
   )`,
 
-  lookup_tables: `CREATE TABLE IF NOT EXISTS lookup_tables (
+  lookup_tables: `CREATE TABLE IF NOT EXISTS \`lookup_tables\` (
     id VARCHAR(191) PRIMARY KEY,
     category VARCHAR(191) NOT NULL,
-    options JSONB,
-    raw_data JSONB
+    options JSON,
+    raw_data JSON
   )`,
 
-  vehicle_categories: `CREATE TABLE IF NOT EXISTS vehicle_categories (
+  vehicle_categories: `CREATE TABLE IF NOT EXISTS \`vehicle_categories\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191) NOT NULL,
     status VARCHAR(50),
     description TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  tanker_ownerships: `CREATE TABLE IF NOT EXISTS tanker_ownerships (
+  tanker_ownerships: `CREATE TABLE IF NOT EXISTS \`tanker_ownerships\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191) NOT NULL,
     status VARCHAR(50),
     description TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  users: `CREATE TABLE IF NOT EXISTS users (
+  users: `CREATE TABLE IF NOT EXISTS \`users\` (
     id VARCHAR(191) PRIMARY KEY,
     username VARCHAR(191) NOT NULL,
     password VARCHAR(255) NOT NULL,
     name VARCHAR(191),
     role VARCHAR(100),
     status VARCHAR(50),
-    permissions JSONB,
-    "createdAt" VARCHAR(100),
-    raw_data JSONB
+    permissions JSON,
+    \`createdAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  vehicles: `CREATE TABLE IF NOT EXISTS vehicles (
+  vehicles: `CREATE TABLE IF NOT EXISTS \`vehicles\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     number VARCHAR(100),
@@ -156,12 +160,12 @@ export const TABLE_SCHEMAS = {
     status VARCHAR(50),
     assigned_driver VARCHAR(191),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  transporters: `CREATE TABLE IF NOT EXISTS transporters (
+  transporters: `CREATE TABLE IF NOT EXISTS \`transporters\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -172,12 +176,12 @@ export const TABLE_SCHEMAS = {
     cnic VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  loading_sources: `CREATE TABLE IF NOT EXISTS loading_sources (
+  loading_sources: `CREATE TABLE IF NOT EXISTS \`loading_sources\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -186,12 +190,12 @@ export const TABLE_SCHEMAS = {
     phone VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  destinations: `CREATE TABLE IF NOT EXISTS destinations (
+  destinations: `CREATE TABLE IF NOT EXISTS \`destinations\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -199,12 +203,12 @@ export const TABLE_SCHEMAS = {
     distance_km DECIMAL(10,2),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  customers: `CREATE TABLE IF NOT EXISTS customers (
+  customers: `CREATE TABLE IF NOT EXISTS \`customers\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     business_name VARCHAR(191),
@@ -216,12 +220,12 @@ export const TABLE_SCHEMAS = {
     strn VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  drivers: `CREATE TABLE IF NOT EXISTS drivers (
+  drivers: `CREATE TABLE IF NOT EXISTS \`drivers\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -235,12 +239,12 @@ export const TABLE_SCHEMAS = {
     status VARCHAR(50),
     address TEXT,
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  vendors: `CREATE TABLE IF NOT EXISTS vendors (
+  vendors: `CREATE TABLE IF NOT EXISTS \`vendors\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -251,12 +255,12 @@ export const TABLE_SCHEMAS = {
     ntn VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  trips: `CREATE TABLE IF NOT EXISTS trips (
+  trips: `CREATE TABLE IF NOT EXISTS \`trips\` (
     id VARCHAR(191) PRIMARY KEY,
     trip_no VARCHAR(100),
     loading_date VARCHAR(100),
@@ -287,12 +291,12 @@ export const TABLE_SCHEMAS = {
     payment_status VARCHAR(50),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  fines: `CREATE TABLE IF NOT EXISTS fines (
+  fines: `CREATE TABLE IF NOT EXISTS \`fines\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     vehicle VARCHAR(191),
@@ -304,12 +308,12 @@ export const TABLE_SCHEMAS = {
     paid_by VARCHAR(191),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  workshops: `CREATE TABLE IF NOT EXISTS workshops (
+  workshops: `CREATE TABLE IF NOT EXISTS \`workshops\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -319,24 +323,24 @@ export const TABLE_SCHEMAS = {
     specialization VARCHAR(191),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  maintenance_heads: `CREATE TABLE IF NOT EXISTS maintenance_heads (
+  maintenance_heads: `CREATE TABLE IF NOT EXISTS \`maintenance_heads\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
     category VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  maintenance: `CREATE TABLE IF NOT EXISTS maintenance (
+  maintenance: `CREATE TABLE IF NOT EXISTS \`maintenance\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     vehicle VARCHAR(191),
@@ -354,12 +358,12 @@ export const TABLE_SCHEMAS = {
     payment_status VARCHAR(50),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  document_register: `CREATE TABLE IF NOT EXISTS document_register (
+  document_register: `CREATE TABLE IF NOT EXISTS \`document_register\` (
     id VARCHAR(191) PRIMARY KEY,
     document_type VARCHAR(191),
     vehicle VARCHAR(191),
@@ -370,12 +374,12 @@ export const TABLE_SCHEMAS = {
     cost DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  tyre_brands: `CREATE TABLE IF NOT EXISTS tyre_brands (
+  tyre_brands: `CREATE TABLE IF NOT EXISTS \`tyre_brands\` (
     id VARCHAR(191) PRIMARY KEY,
     brand_code VARCHAR(100),
     brand_name VARCHAR(191),
@@ -383,12 +387,12 @@ export const TABLE_SCHEMAS = {
     origin VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  tyres_record: `CREATE TABLE IF NOT EXISTS tyres_record (
+  tyres_record: `CREATE TABLE IF NOT EXISTS \`tyres_record\` (
     id VARCHAR(191) PRIMARY KEY,
     purchase_date VARCHAR(100),
     tyre_number VARCHAR(100),
@@ -405,12 +409,12 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     meter_reading VARCHAR(100),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  fuel_pumps: `CREATE TABLE IF NOT EXISTS fuel_pumps (
+  fuel_pumps: `CREATE TABLE IF NOT EXISTS \`fuel_pumps\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -420,12 +424,12 @@ export const TABLE_SCHEMAS = {
     payment_type VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  fuel_entries: `CREATE TABLE IF NOT EXISTS fuel_entries (
+  fuel_entries: `CREATE TABLE IF NOT EXISTS \`fuel_entries\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     vehicle VARCHAR(191),
@@ -441,12 +445,12 @@ export const TABLE_SCHEMAS = {
     meter_reading VARCHAR(100),
     receipt_no VARCHAR(100),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  engine_oil_defination: `CREATE TABLE IF NOT EXISTS engine_oil_defination (
+  engine_oil_defination: `CREATE TABLE IF NOT EXISTS \`engine_oil_defination\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     name VARCHAR(191),
@@ -458,12 +462,12 @@ export const TABLE_SCHEMAS = {
     price DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  engine_oil_purchase: `CREATE TABLE IF NOT EXISTS engine_oil_purchase (
+  engine_oil_purchase: `CREATE TABLE IF NOT EXISTS \`engine_oil_purchase\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     oil_name VARCHAR(191),
@@ -475,12 +479,12 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     invoice_no VARCHAR(100),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  engine_oil_usage: `CREATE TABLE IF NOT EXISTS engine_oil_usage (
+  engine_oil_usage: `CREATE TABLE IF NOT EXISTS \`engine_oil_usage\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     vehicle VARCHAR(191),
@@ -489,12 +493,12 @@ export const TABLE_SCHEMAS = {
     quantity DECIMAL(12,2),
     meter_reading VARCHAR(100),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  bank_accounts: `CREATE TABLE IF NOT EXISTS bank_accounts (
+  bank_accounts: `CREATE TABLE IF NOT EXISTS \`bank_accounts\` (
     id VARCHAR(191) PRIMARY KEY,
     code VARCHAR(100),
     bank_name VARCHAR(191),
@@ -506,12 +510,12 @@ export const TABLE_SCHEMAS = {
     current_balance DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  bank_transactions: `CREATE TABLE IF NOT EXISTS bank_transactions (
+  bank_transactions: `CREATE TABLE IF NOT EXISTS \`bank_transactions\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     account VARCHAR(191),
@@ -523,12 +527,12 @@ export const TABLE_SCHEMAS = {
     cheque_no VARCHAR(100),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  payments: `CREATE TABLE IF NOT EXISTS payments (
+  payments: `CREATE TABLE IF NOT EXISTS \`payments\` (
     id VARCHAR(191) PRIMARY KEY,
     voucher_no VARCHAR(100),
     payment_date VARCHAR(100),
@@ -545,12 +549,12 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     remarks TEXT,
     status VARCHAR(50),
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  general_ledger: `CREATE TABLE IF NOT EXISTS general_ledger (
+  general_ledger: `CREATE TABLE IF NOT EXISTS \`general_ledger\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     account_name VARCHAR(191),
@@ -562,12 +566,12 @@ export const TABLE_SCHEMAS = {
     credit DECIMAL(12,2),
     balance DECIMAL(12,2),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  cash_payments: `CREATE TABLE IF NOT EXISTS cash_payments (
+  cash_payments: `CREATE TABLE IF NOT EXISTS \`cash_payments\` (
     id VARCHAR(191) PRIMARY KEY,
     date VARCHAR(100),
     paid_to VARCHAR(191),
@@ -580,12 +584,12 @@ export const TABLE_SCHEMAS = {
     amount DECIMAL(12,2),
     bank VARCHAR(191),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  bills_register: `CREATE TABLE IF NOT EXISTS bills_register (
+  bills_register: `CREATE TABLE IF NOT EXISTS \`bills_register\` (
     id VARCHAR(191) PRIMARY KEY,
     bill_no VARCHAR(100),
     bill_date VARCHAR(100),
@@ -598,12 +602,12 @@ export const TABLE_SCHEMAS = {
     total_amount DECIMAL(12,2),
     status VARCHAR(50),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  payments_received: `CREATE TABLE IF NOT EXISTS payments_received (
+  payments_received: `CREATE TABLE IF NOT EXISTS \`payments_received\` (
     id VARCHAR(191) PRIMARY KEY,
     payment_id VARCHAR(191),
     date VARCHAR(100),
@@ -614,12 +618,12 @@ export const TABLE_SCHEMAS = {
     cheque_no VARCHAR(100),
     amount DECIMAL(12,2),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`,
 
-  payment_history: `CREATE TABLE IF NOT EXISTS payment_history (
+  payment_history: `CREATE TABLE IF NOT EXISTS \`payment_history\` (
     id VARCHAR(191) PRIMARY KEY,
     payment_id VARCHAR(191),
     date VARCHAR(100),
@@ -627,14 +631,28 @@ export const TABLE_SCHEMAS = {
     type_val VARCHAR(100),
     reference VARCHAR(191),
     remarks TEXT,
-    "createdAt" VARCHAR(100),
-    "updatedAt" VARCHAR(100),
-    raw_data JSONB
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
   )`
 };
 
-export async function initializeDatabase(pool) {
-  await pool.query(`DROP TABLE IF EXISTS app_records`);
+export async function initializeDatabase(pool, config = {}) {
+  const dbName = config.DB_NAME || process.env.DB_NAME || 'falcon_energy';
+  try {
+    const rootConn = await mysql.createConnection({
+      host: config.DB_HOST || process.env.DB_HOST || '127.0.0.1',
+      port: Number(config.DB_PORT || process.env.DB_PORT || 3306),
+      user: config.DB_USER || process.env.DB_USER || 'root',
+      password: config.DB_PASSWORD !== undefined ? config.DB_PASSWORD : (process.env.DB_PASSWORD || '')
+    });
+    await rootConn.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\``);
+    await rootConn.end();
+  } catch (e) {
+    // If root database creation connection fails, continue with pool execution
+  }
+
+  await pool.query('DROP TABLE IF EXISTS app_records');
 
   for (const [tableName, sql] of Object.entries(TABLE_SCHEMAS)) {
     await pool.query(sql);
@@ -642,10 +660,10 @@ export async function initializeDatabase(pool) {
 }
 
 export async function resetDatabase(pool) {
-  await pool.query(`DROP TABLE IF EXISTS app_records`);
+  await pool.query('DROP TABLE IF EXISTS app_records');
   for (const [tableName] of Object.entries(TABLE_SCHEMAS)) {
     try {
-      await pool.query(`DROP TABLE IF EXISTS "${tableName}" CASCADE`);
+      await pool.query(`DROP TABLE IF EXISTS \`${tableName}\``);
     } catch (e) {
       // Ignore drop errors
     }
@@ -677,8 +695,7 @@ export async function readState(pool) {
 
   for (const table of tables) {
     try {
-      const result = await pool.query(`SELECT * FROM "${table}"`);
-      const rows = result.rows || [];
+      const [rows] = await pool.query(`SELECT * FROM \`${table}\``);
       if (rows.length > 0) hasAnyData = true;
 
       if (table === 'company_info') {
@@ -722,9 +739,9 @@ function mapEntityRow(table, record, fallbackId = '1') {
 
 function insertRowQuery(tableName, row) {
   const keys = Object.keys(row);
-  const cols = keys.map(k => `"${k}"`).join(', ');
-  const values = keys.map((_, i) => `$${i + 1}`).join(', ');
-  const queryText = `INSERT INTO "${tableName}" (${cols}) VALUES (${values})`;
+  const cols = keys.map(k => `\`${k}\``).join(', ');
+  const values = keys.map(() => '?').join(', ');
+  const queryText = `INSERT INTO \`${tableName}\` (${cols}) VALUES (${values})`;
   const params = keys.map(k => row[k]);
   return { queryText, params };
 }
@@ -738,14 +755,14 @@ export async function writeState(pool, state) {
     }
   }
 
-  const connection = await pool.connect();
+  const connection = await pool.getConnection();
   try {
-    await connection.query('BEGIN');
+    await connection.beginTransaction();
 
     for (const [entity, value] of Object.entries(state)) {
       if (!TABLE_SCHEMAS[entity]) continue;
 
-      await connection.query(`DELETE FROM "${entity}"`);
+      await connection.query(`DELETE FROM \`${entity}\``);
 
       if (entity === 'company_info' && value && typeof value === 'object') {
         const row = mapEntityRow(entity, value, '1');
@@ -761,9 +778,9 @@ export async function writeState(pool, state) {
       }
     }
 
-    await connection.query('COMMIT');
+    await connection.commit();
   } catch (error) {
-    await connection.query('ROLLBACK');
+    await connection.rollback();
     throw error;
   } finally {
     connection.release();

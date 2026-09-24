@@ -11,7 +11,7 @@ const config = {
   codeField: 'code',
   idPrefix: 'TOW-',
   columns: [
-    { key: 'id', label: 'Ownership ID', format: 'bold' },
+    { key: 'code', label: 'Ownership ID', format: 'bold' },
     { key: 'name', label: 'Ownership Type', format: 'bold' },
     { key: 'description', label: 'Description' },
     { key: 'status', label: 'Status', badge: true }

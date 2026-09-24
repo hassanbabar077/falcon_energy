@@ -11,7 +11,7 @@ const config = {
   codeField: 'code',
   idPrefix: 'CAT-',
   columns: [
-    { key: 'id', label: 'Category ID', format: 'bold' },
+    { key: 'code', label: 'Category ID', format: 'bold' },
     { key: 'name', label: 'Category Name', format: 'bold' },
     { key: 'description', label: 'Description' },
     { key: 'status', label: 'Status', badge: true }

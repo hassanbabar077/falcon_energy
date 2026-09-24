@@ -19,8 +19,11 @@ export const PERMISSION_MODULES = [
       { id: 'tyres', label: 'Tyres Inventory' },
       { id: 'tyre_brands', label: 'Tyre Brands' },
       { id: 'cash', label: 'Cash Accounts' },
+      
       { id: 'fuel_pump', label: 'Fuel Pumps' },
       { id: 'engine_oil', label: 'Engine Oil Master' },
+      { id: 'vehicle_category', label: 'Vehicle Category' },
+      { id: 'tanker_ownership', label: 'Tanker Ownership' },
       { id: 'bank_accounts', label: 'Bank Accounts' }
     ]
   },

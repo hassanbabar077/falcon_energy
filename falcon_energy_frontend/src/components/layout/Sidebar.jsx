@@ -5,7 +5,8 @@ import { hasPermission } from '../../services/permissionService';
 const MASTER_DATA_IDS = [
   'masterData', 'vehicles', 'transporters', 'sources', 'destinations', 'customers',
   'workshops', 'maint_heads', 'documents', 'vendors', 'drivers', 'tyres',
-  'tyre_brands', 'cash', 'fuel_pump', 'engine_oil', 'bank_accounts'
+  'tyre_brands', 'cash', 'fuel_pump', 'engine_oil', 'bank_accounts',
+  'vehicle_category', 'tanker_ownership'
 ];
 
 const ENTRIES_IDS = [
