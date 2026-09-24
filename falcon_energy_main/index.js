@@ -19,6 +19,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'falcon_energy_secure_jwt_secret_20
 const app = express();
 const pool = createPool({ DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD });
 const port = process.env.PORT || 3001;
+
 app.use(cors());
 app.use(express.json({ limit: '20mb' }));
 
@@ -36,7 +37,12 @@ app.get('/api/health', async (_req, res) => {
     res.status(500).json({ status: 'error', message: error.message, code: error.code });
   }
 });
-app.get('/api/state', authenticate, async (_req, res, next) => { try { res.json({ state: await readState(pool) }); } catch (error) { next(error); } });
+
+app.get('/api/state', authenticate, async (_req, res, next) => {
+  try { res.json({ state: await readState(pool) }); }
+  catch (error) { next(error); }
+});
+
 app.post('/api/auth/login', async (req, res, next) => {
   try {
     const user = await verifyUser(pool, req.body.username || '', req.body.password || '');
@@ -45,6 +51,7 @@ app.post('/api/auth/login', async (req, res, next) => {
     res.json({ user, token });
   } catch (error) { next(error); }
 });
+
 app.put('/api/state', authenticate, async (req, res, next) => {
   try {
     if (!req.body?.state || typeof req.body.state !== 'object') return res.status(400).json({ error: 'A valid state object is required.' });
@@ -52,14 +59,21 @@ app.put('/api/state', authenticate, async (req, res, next) => {
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
-app.use((error, _req, res, _next) => { console.error('API Error:', error); res.status(500).json({ error: error.message || 'The server could not complete the request.' }); });
 
-try {
-  await initializeDatabase(pool);
-  await ensureSeedState(pool);
-} catch (err) {
-  console.error('Database startup note:', err.message);
-}
+app.use((error, _req, res, _next) => {
+  console.error('API Error:', error);
+  res.status(500).json({ error: error.message || 'The server could not complete the request.' });
+});
 
-app.listen(port, () => console.log(`Noor Transport API listening on ${port}`));
+app.listen(port, () => {
+  console.log(`Noor Transport API listening on ${port}`);
+});
 
+(async () => {
+  try {
+    await initializeDatabase(pool);
+    await ensureSeedState(pool);
+  } catch (err) {
+    console.error('Database startup note:', err.message);
+  }
+})();
