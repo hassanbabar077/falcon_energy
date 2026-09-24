@@ -16,7 +16,7 @@ if (missing.length) throw new Error(`Missing required environment variables: ${m
 
 const app = express();
 const pool = createPool(process.env);
-const port = Number(process.env.PORT || 3001);
+const port = process.env.PORT || 3001;
 const origin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
 app.use(cors({ origin, credentials: true }));
 app.use(express.json({ limit: '20mb' }));
@@ -46,6 +46,12 @@ app.put('/api/state', authenticate, async (req, res, next) => {
 });
 app.use((error, _req, res, _next) => { console.error('API Error:', error); res.status(500).json({ error: error.message || 'The server could not complete the request.' }); });
 
-await initializeDatabase(pool);
-await ensureSeedState(pool);
-app.listen(port, () => console.log(`Noor Transport API listening on port ${port}`));
+try {
+  await initializeDatabase(pool);
+  await ensureSeedState(pool);
+} catch (err) {
+  console.error('Database startup note:', err.message);
+}
+
+app.listen(port, () => console.log(`Noor Transport API listening on ${port}`));
+
