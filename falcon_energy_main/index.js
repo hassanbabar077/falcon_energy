@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import { createPool, ensureSeedState, initializeDatabase, readState, verifyUser, writeState } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, './.env') });
+dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
 
 // DB_PASSWORD may intentionally be blank in a default local XAMPP setup.
 const required = ['DB_HOST', 'DB_NAME', 'DB_USER', 'JWT_SECRET'];
