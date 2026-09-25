@@ -156,6 +156,20 @@ export default function App() {
   }, [activeTab]);
 
   useEffect(() => {
+    const handlePopState = (event) => {
+      const tabFromState = event.state?.tab;
+      const hashTab = window.location.hash?.replace(/^#\//, '');
+      const targetTab = tabFromState || hashTab;
+      if (targetTab) {
+        setActiveTab(targetTab);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
     if (currentUser) {
       localStorage.setItem(USER_SESSION_KEY, JSON.stringify(currentUser));
       if (!localStorage.getItem(SESSION_TIMESTAMP_KEY)) {
@@ -199,7 +213,14 @@ export default function App() {
       handleBackup();
       return;
     }
-    setActiveTab(id);
+    if (activeTab !== id) {
+      try {
+        window.history.pushState({ tab: id }, '', `#/${id}`);
+      } catch (e) {
+        // Fallback if browser pushState fails
+      }
+      setActiveTab(id);
+    }
   };
 
   if (!databaseReady) {

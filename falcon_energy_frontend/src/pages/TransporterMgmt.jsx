@@ -1,6 +1,7 @@
 import React from 'react';
 import { Truck as TruckIcon } from 'lucide-react';
 import { CrudPage } from '../components/CrudPage';
+import { dbService } from '../services/db';
 
 const config = {
   title: 'Transporter Management',
