@@ -259,7 +259,7 @@ export function CrudPage({ config }) {
   const [workshops, setWorkshops] = useState([]);
   const [trips, setTrips] = useState([]);
 
-  const categoryFilter = config.category || config.categoryFilter || defaultValues?.category;
+  const categoryFilter = config.category || config.categoryFilter;
 
   // Load records
   const loadMasterLists = () => {
