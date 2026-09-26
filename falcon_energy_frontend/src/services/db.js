@@ -188,22 +188,28 @@ class DatabaseService {
 
   async saveData() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-      this.notify();
       if (this.token) {
-        try {
-          const response = await fetch(`${API_BASE_URL}/state`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
-            body: JSON.stringify({ state: this.data })
-          });
-          if (!response.ok) console.error('Shared database save failed. Your local backup is still intact.');
-        } catch (error) {
-          console.warn('Shared database save offline. Saved locally:', error.message);
+        const response = await fetch(`${API_BASE_URL}/state`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
+          body: JSON.stringify({ state: this.data })
+        });
+
+        let result = {};
+        try { result = await response.json(); } catch (e) {}
+
+        if (!response.ok || result.success === false) {
+          const errMessage = result.error || result.message || `Server error (${response.status})`;
+          console.error('[Database Save Failed]:', errMessage);
+          throw new Error(errMessage);
         }
       }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      this.notify();
+      return true;
     } catch (e) {
       console.error("Error saving DB:", e);
+      throw e;
     }
   }
 
@@ -218,44 +224,69 @@ class DatabaseService {
   }
 
   // Update company metadata
-  updateCompanyInfo(info) {
+  async updateCompanyInfo(info) {
+    const backup = { ...this.data.company_info };
     this.data.company_info = { ...this.data.company_info, ...info };
-    this.saveData();
-    return this.data.company_info;
+    try {
+      await this.saveData();
+      return this.data.company_info;
+    } catch (err) {
+      this.data.company_info = backup;
+      throw err;
+    }
   }
 
   // Generic Insert with timestamps
-  insertRecord(tableName, record) {
+  async insertRecord(tableName, record) {
     if (!this.data[tableName]) {
       this.data[tableName] = [];
     }
     const now = new Date().toISOString();
     const enriched = { ...record, createdAt: now, updatedAt: now };
+    const originalList = [...this.data[tableName]];
     this.data[tableName].unshift(enriched);
-    this.saveData();
-    return enriched;
+    try {
+      await this.saveData();
+      return enriched;
+    } catch (err) {
+      this.data[tableName] = originalList;
+      throw err;
+    }
   }
 
   // Generic Update with timestamp
-  updateRecord(tableName, keyField, keyVal, updatedFields) {
+  async updateRecord(tableName, keyField, keyVal, updatedFields) {
     const list = this.data[tableName] || [];
     const index = list.findIndex(item => item[keyField] === keyVal);
     if (index !== -1) {
       const now = new Date().toISOString();
+      const originalItem = { ...list[index] };
       list[index] = { ...list[index], ...updatedFields, updatedAt: now };
       this.data[tableName] = list;
-      this.saveData();
-      return list[index];
+      try {
+        await this.saveData();
+        return list[index];
+      } catch (err) {
+        list[index] = originalItem;
+        this.data[tableName] = list;
+        throw err;
+      }
     }
     return null;
   }
 
   // Generic Delete
-  deleteRecord(tableName, keyField, keyVal) {
+  async deleteRecord(tableName, keyField, keyVal) {
     if (!this.data[tableName]) return false;
+    const originalList = [...this.data[tableName]];
     this.data[tableName] = this.data[tableName].filter(item => item[keyField] !== keyVal);
-    this.saveData();
-    return true;
+    try {
+      await this.saveData();
+      return true;
+    } catch (err) {
+      this.data[tableName] = originalList;
+      throw err;
+    }
   }
 
   // Check if Master Data is referenced in any entry or transactional module
@@ -536,7 +567,7 @@ class DatabaseService {
   }
 
   // Record payment received and automatically update selected bank balance (Item 6)
-  addPaymentReceived(formData) {
+  async addPaymentReceived(formData) {
     const prefix = formData.payment_method === 'Cash' ? 'CP-' : 'BP-';
     const nextId = this.generateNextID('payments_received', prefix, 'payment_id');
     const amountNum = parseFloat(formData.amount) || 0;
@@ -552,7 +583,7 @@ class DatabaseService {
       remarks: formData.remarks || ''
     };
 
-    this.insertRecord('payments_received', record);
+    await this.insertRecord('payments_received', record);
 
     // Also record in payment_history
     const historyId = this.generateNextID('payment_history', 'HIST-', 'id');
@@ -565,7 +596,7 @@ class DatabaseService {
       reference: formData.reference_number || record.date,
       remarks: formData.remarks || `Payment Received via ${formData.payment_method}`
     };
-    this.insertRecord('payment_history', historyRecord);
+    await this.insertRecord('payment_history', historyRecord);
 
     // If Bank payment method, add amount to bank_accounts current_balance
     if (formData.payment_method === 'Bank' && formData.bank) {
@@ -595,11 +626,11 @@ class DatabaseService {
           description: `Payment Received (${nextId}) into ${bankAcc.bank_name}`,
           balance_after: newBal
         };
-        this.insertRecord('bank_transactions', bankTxn);
+        await this.insertRecord('bank_transactions', bankTxn);
       }
     }
 
-    this.saveData();
+    await this.saveData();
     return record;
   }
 
@@ -731,7 +762,7 @@ class DatabaseService {
   }
 
   // Finalize trip fuel accounting on delivery update and carry forward remaining fuel to vehicle
-  updateTripDeliveryWithFuel(tripId, deliveryData) {
+  async updateTripDeliveryWithFuel(tripId, deliveryData) {
     const normId = String(tripId).trim().toLowerCase();
     const trips = this.getTable('trips');
     const trip = trips.find(t => String(t.id).trim().toLowerCase() === normId || String(t.code).trim().toLowerCase() === normId);
@@ -756,7 +787,7 @@ class DatabaseService {
     };
 
     // Update trip record
-    const updatedTrip = this.updateRecord('trips', 'id', trip.id, updatedTripPayload);
+    const updatedTrip = await this.updateRecord('trips', 'id', trip.id, updatedTripPayload);
 
     // Carry forward remaining fuel & its cost as opening fuel for this vehicle's NEXT trip!
     if (trip.vehicle) {
@@ -767,7 +798,7 @@ class DatabaseService {
         String(v.code).trim().toLowerCase() === normV
       );
       if (veh) {
-        this.updateRecord('vehicles', 'code', veh.code, {
+        await this.updateRecord('vehicles', 'code', veh.code, {
           current_fuel_liters: remainingLiters,
           current_fuel_cost: remainingCost
         });
@@ -1730,7 +1761,7 @@ class DatabaseService {
   }
 
   // Process Unified Payment Voucher against Party Balance
-  processPaymentVoucher({
+  async processPaymentVoucher({
     payment_source, // 'Bank' or 'Cash'
     bank_id,
     cash_id,
@@ -1772,7 +1803,7 @@ class DatabaseService {
       sourceName = 'Cash Account';
       // Record cash payment ledger entry
       const cashTxnId = this.generateNextID('cash_payments', 'CP-', 'id');
-      this.insertRecord('cash_payments', {
+      await this.insertRecord('cash_payments', {
         id: cashTxnId,
         date: payment_date || new Date().toISOString().split('T')[0],
         category: party_category,
@@ -1807,7 +1838,7 @@ class DatabaseService {
       createdAt: new Date().toISOString()
     };
 
-    this.insertRecord('payments', paymentRecord);
+    await this.insertRecord('payments', paymentRecord);
 
     // 4. Record Bank Transaction Entry (if Bank source)
     if (payment_source === 'Bank' && bankObj) {
@@ -1826,7 +1857,7 @@ class DatabaseService {
         description: `Payment Voucher ${voucherNo} to ${party_name} (${party_category})`,
         balance_after: bankObj.current_balance
       };
-      this.insertRecord('bank_transactions', bankTxn);
+      await this.insertRecord('bank_transactions', bankTxn);
     }
 
     // 5. Record General Ledger Entry against Party
@@ -1844,9 +1875,9 @@ class DatabaseService {
       bank_name: sourceName,
       remarks: remarks || `Voucher ${voucherNo} paid via ${payment_method || payment_source}`
     };
-    this.insertRecord('general_ledger', glRecord);
+    await this.insertRecord('general_ledger', glRecord);
 
-    this.saveData();
+    await this.saveData();
     return paymentRecord;
   }
 

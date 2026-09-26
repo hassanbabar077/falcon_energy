@@ -103,6 +103,7 @@ export function UserMgmt() {
 
       setShowModal(false);
       loadUsers();
+      setTimeout(() => window.location.reload(), 600);
     } catch (err) {
       setFormError(err.message || 'Error saving user.');
     }
@@ -118,6 +119,7 @@ export function UserMgmt() {
       try {
         await dbService.deleteUser(user.id);
         loadUsers();
+        setTimeout(() => window.location.reload(), 600);
       } catch (err) {
         alert(err.message || 'Error deleting user.');
       }

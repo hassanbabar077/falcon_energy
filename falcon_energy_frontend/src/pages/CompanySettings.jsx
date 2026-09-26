@@ -7,11 +7,15 @@ export function CompanySettings() {
   const [activeTab, setActiveTab] = useState('general');
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-    dbService.updateCompanyInfo(info);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    try {
+      await dbService.updateCompanyInfo(info);
+      setSavedSuccess(true);
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      alert('Failed to save configuration: ' + (err.message || 'Database error'));
+    }
   };
 
   const handleResetDB = () => {

@@ -145,7 +145,7 @@ export function UpdateDelivery() {
     });
   };
 
-  const handleSaveDelivery = (e) => {
+  const handleSaveDelivery = async (e) => {
     e.preventDefault();
     if (!selectedTrip) return;
 
@@ -201,10 +201,15 @@ export function UpdateDelivery() {
       remarks: selectedTrip.remarks || ''
     };
 
-    dbService.updateTripDeliveryWithFuel(selectedTrip.id, deliveryUpdates);
-    loadData();
-    setSelectedTrip(null);
-    setToast({ message: `Delivery info for Trip ${selectedTrip.id} updated successfully! Status set to '${newStatus}'.`, type: 'success' });
+    try {
+      await dbService.updateTripDeliveryWithFuel(selectedTrip.id, deliveryUpdates);
+      loadData();
+      setSelectedTrip(null);
+      setToast({ message: `Delivery info for Trip ${selectedTrip.id} saved to database! Status set to '${newStatus}'.`, type: 'success' });
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      setToast({ message: `Update Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+    }
   };
 
   return (

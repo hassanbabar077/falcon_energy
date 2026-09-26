@@ -37,7 +37,7 @@ export function PaymentReceived() {
     setFormData(prev => ({ ...prev, [key]: val }));
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
     if (!formData.amount || parseFloat(formData.amount) <= 0) {
       setToast({ message: 'Please enter a valid payment amount.', type: 'error' });
@@ -48,20 +48,25 @@ export function PaymentReceived() {
       return;
     }
 
-    // Call service to insert payment received and trigger payment history creation
-    dbService.addPaymentReceived(formData);
+    try {
+      // Call service to insert payment received and trigger payment history creation
+      await dbService.addPaymentReceived(formData);
 
-    loadData();
-    setIsAddOpen(false);
-    setToast({ message: `Payment ${nextId} recorded and added to Payment History!`, type: 'success' });
-    setFormData({
-      payment_method: 'Cash',
-      bank: '',
-      date: new Date().toISOString().split('T')[0],
-      amount: '',
-      reference_number: '',
-      remarks: ''
-    });
+      loadData();
+      setIsAddOpen(false);
+      setToast({ message: `Payment ${nextId} recorded in database!`, type: 'success' });
+      setFormData({
+        payment_method: 'Cash',
+        bank: '',
+        date: new Date().toISOString().split('T')[0],
+        amount: '',
+        reference_number: '',
+        remarks: ''
+      });
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      setToast({ message: `Save Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+    }
   };
 
   return (

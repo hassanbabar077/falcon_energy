@@ -365,39 +365,52 @@ export function CrudPage({ config }) {
   };
 
   // ADD
-  const handleAdd = (e) => {
+  const handleAdd = async (e) => {
     e.preventDefault();
     const newRecord = { ...formData };
     newRecord[recordIdField] = dbService.generateNextID(tableName, idPrefix, recordIdField);
     if (config.onBeforeSave) config.onBeforeSave(newRecord);
-    dbService.insertRecord(tableName, newRecord);
-    refreshRecords();
-    setIsAddOpen(false);
-    setFormData({ ...defaultValues });
-    setToast({ message: `Record ${newRecord[recordIdField]} added successfully!`, type: 'success' });
+    try {
+      await dbService.insertRecord(tableName, newRecord);
+      setIsAddOpen(false);
+      setFormData({ ...defaultValues });
+      setToast({ message: `Record ${newRecord[recordIdField]} saved to database!`, type: 'success' });
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      setToast({ message: `Save Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+    }
   };
 
   // EDIT
-  const handleEdit = (e) => {
+  const handleEdit = async (e) => {
     e.preventDefault();
     const updated = { ...editData };
     delete updated[recordIdField];
     delete updated.createdAt;
     if (config.onBeforeSave) config.onBeforeSave(updated);
-    dbService.updateRecord(tableName, recordIdField, editData[recordIdField], updated);
-    refreshRecords();
-    setIsEditOpen(false);
-    setEditData(null);
-    setToast({ message: `Record updated successfully!`, type: 'success' });
+    try {
+      await dbService.updateRecord(tableName, recordIdField, editData[recordIdField], updated);
+      setIsEditOpen(false);
+      setEditData(null);
+      setToast({ message: `Record updated in database!`, type: 'success' });
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      setToast({ message: `Update Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+    }
   };
 
   // DELETE
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteTarget) {
-      dbService.deleteRecord(tableName, recordIdField, deleteTarget[recordIdField]);
-      refreshRecords();
-      setDeleteTarget(null);
-      setToast({ message: `Record deleted successfully.`, type: 'success' });
+      try {
+        await dbService.deleteRecord(tableName, recordIdField, deleteTarget[recordIdField]);
+        setDeleteTarget(null);
+        setToast({ message: `Record deleted from database!`, type: 'success' });
+        setTimeout(() => window.location.reload(), 600);
+      } catch (err) {
+        setDeleteTarget(null);
+        setToast({ message: `Delete Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+      }
     }
   };
 

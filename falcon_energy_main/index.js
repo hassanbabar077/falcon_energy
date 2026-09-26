@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import { createPool, ensureSeedState, initializeDatabase, readState, verifyUser, writeState } from './db.js';
+import { createPool, ensureSeedState, executeWithRetry, initializeDatabase, readState, verifyUser, writeState } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
@@ -25,54 +25,73 @@ app.use(express.json({ limit: '20mb' }));
 
 const authenticate = (req, res, next) => {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
-  catch { res.status(401).json({ error: 'Authentication required.' }); }
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ success: false, error: 'Authentication required.' });
+  }
 };
 
 app.get('/api/health', async (_req, res) => {
   try {
-    await pool.query('SELECT 1');
-    res.json({ status: 'ok' });
+    await executeWithRetry(() => pool.query('SELECT 1'));
+    res.json({ status: 'ok', success: true });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message, code: error.code });
+    console.error('[Health Check Failed]:', error);
+    res.status(500).json({ status: 'error', success: false, message: error.message, code: error.code });
   }
 });
 
-app.get('/api/state', authenticate, async (_req, res, next) => {
-  try { res.json({ state: await readState(pool) }); }
-  catch (error) { next(error); }
+app.get('/api/state', authenticate, async (_req, res) => {
+  try {
+    const state = await executeWithRetry(() => readState(pool));
+    res.json({ success: true, state });
+  } catch (error) {
+    console.error('[GET /api/state Error]:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to fetch database state.' });
+  }
 });
 
-app.post('/api/auth/login', async (req, res, next) => {
+app.post('/api/auth/login', async (req, res) => {
   try {
-    const user = await verifyUser(pool, req.body.username || '', req.body.password || '');
-    if (!user) return res.status(401).json({ error: 'Invalid username or password, or account is inactive.' });
-    const token = jwt.sign({ id: user.id, role: user.role, permissions: user.permissions }, JWT_SECRET, { expiresIn: '2h' });
-    res.json({ user, token });
-  } catch (error) { next(error); }
+    const user = await executeWithRetry(() => verifyUser(pool, req.body.username || '', req.body.password || ''));
+    if (!user) return res.status(401).json({ success: false, error: 'Invalid username or password, or account is inactive.' });
+    const token = jwt.sign({ id: user.id, role: user.role, permissions: user.permissions }, JWT_SECRET, { expiresIn: '24h' });
+    res.json({ success: true, user, token });
+  } catch (error) {
+    console.error('[POST /api/auth/login Error]:', error);
+    res.status(500).json({ success: false, error: error.message || 'Authentication error.' });
+  }
 });
 
-app.put('/api/state', authenticate, async (req, res, next) => {
+app.put('/api/state', authenticate, async (req, res) => {
   try {
-    if (!req.body?.state || typeof req.body.state !== 'object') return res.status(400).json({ error: 'A valid state object is required.' });
-    await writeState(pool, req.body.state);
-    res.json({ ok: true });
-  } catch (error) { next(error); }
+    if (!req.body?.state || typeof req.body.state !== 'object') {
+      return res.status(400).json({ success: false, error: 'A valid state object is required.' });
+    }
+    await executeWithRetry(() => writeState(pool, req.body.state));
+    console.log(`[Database Write Confirmed] State successfully persisted to MySQL.`);
+    res.json({ success: true, message: 'Database state updated successfully.' });
+  } catch (error) {
+    console.error('[PUT /api/state Error]:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to persist state in database.' });
+  }
 });
 
 app.use((error, _req, res, _next) => {
-  console.error('API Error:', error);
-  res.status(500).json({ error: error.message || 'The server could not complete the request.' });
+  console.error('Unhandled API Error:', error);
+  res.status(500).json({ success: false, error: error.message || 'The server could not complete the request.' });
 });
 
 app.listen(port, () => {
-  console.log(`Noor Transport API listening on ${port}`);
+  console.log(`Falcon Energy API listening on ${port}`);
 });
 
 (async () => {
   try {
-    await initializeDatabase(pool);
-    await ensureSeedState(pool);
+    await executeWithRetry(() => initializeDatabase(pool));
+    await executeWithRetry(() => ensureSeedState(pool));
   } catch (err) {
     console.error('Database startup note:', err.message);
   }

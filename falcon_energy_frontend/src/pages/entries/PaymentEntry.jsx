@@ -86,7 +86,7 @@ export function PaymentEntry() {
   };
 
   // Submit Payment Voucher Form
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
     const amt = parseFloat(payAmount) || 0;
@@ -114,7 +114,7 @@ export function PaymentEntry() {
     try {
       setIsSubmitting(true);
 
-      const voucher = dbService.processPaymentVoucher({
+      const voucher = await dbService.processPaymentVoucher({
         payment_source: paymentSource,
         bank_id: selectedBankId,
         party_category: partyCategory,
@@ -126,7 +126,7 @@ export function PaymentEntry() {
         remarks: remarks
       });
 
-      setToast({ type: 'success', message: `Payment Voucher #${voucher.voucher_no} generated successfully!` });
+      setToast({ type: 'success', message: `Payment Voucher #${voucher.voucher_no} generated and saved to MySQL!` });
       
       // Auto open print modal for generated voucher
       setSelectedVoucherForPrint(voucher);
@@ -141,6 +141,7 @@ export function PaymentEntry() {
       if (selectedParty) {
         setPartySummary(dbService.getPartyPayableSummary(partyCategory, selectedParty));
       }
+      setTimeout(() => window.location.reload(), 1200);
     } catch (err) {
       setToast({ type: 'error', message: err.message || 'Failed to process payment voucher.' });
     } finally {

@@ -50,8 +50,30 @@ export function createPool(config) {
     database: config.DB_NAME || 'falcon_energy',
     waitForConnections: true,
     connectionLimit: 10,
-    queueLimit: 0
+    maxIdle: 10,
+    idleTimeout: 60000,
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 10000
   });
+}
+
+export async function executeWithRetry(fn, retries = 1) {
+  try {
+    return await fn();
+  } catch (error) {
+    const isConnError = error.code === 'PROTOCOL_CONNECTION_LOST' ||
+                        error.code === 'ECONNRESET' ||
+                        error.code === 'ETIMEDOUT' ||
+                        error.code === 'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR' ||
+                        error.code === 'ER_OPTION_PREVENT_HEADER';
+    if (isConnError && retries > 0) {
+      console.warn(`[MySQL Connection Recovery] Connection error (${error.code}). Retrying DB operation...`);
+      await new Promise(r => setTimeout(r, 250));
+      return executeWithRetry(fn, retries - 1);
+    }
+    throw error;
+  }
 }
 
 export const TABLE_COLUMNS = {

@@ -39,7 +39,7 @@ export function TripEdit() {
     });
   }, [trips, searchId, filterVehicle, fromDate, toDate]);
 
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingTrip) return;
 
@@ -52,10 +52,15 @@ export function TripEdit() {
       load_weight: parseFloat(editingTrip.load_weight) || 0,
     };
 
-    dbService.updateRecord('trips', 'id', editingTrip.id, updatedLoadingInfo);
-    loadData();
-    setEditingTrip(null);
-    setToast({ message: `Trip ${editingTrip.id} loading info updated!`, type: 'success' });
+    try {
+      await dbService.updateRecord('trips', 'id', editingTrip.id, updatedLoadingInfo);
+      loadData();
+      setEditingTrip(null);
+      setToast({ message: `Trip ${editingTrip.id} loading info saved to database!`, type: 'success' });
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      setToast({ message: `Update Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+    }
   };
 
   return (

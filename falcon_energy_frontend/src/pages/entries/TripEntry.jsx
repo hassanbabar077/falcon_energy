@@ -54,7 +54,7 @@ export function TripEntry() {
     }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!formData.vehicle || !formData.loading_date || !formData.load_weight) {
       setToast({ message: 'Please fill in all required loading fields.', type: 'error' });
@@ -98,15 +98,20 @@ export function TripEntry() {
       remarks: formData.remarks || ''
     };
 
-    dbService.insertRecord('trips', tripRecord);
+    try {
+      await dbService.insertRecord('trips', tripRecord);
 
-    // Consume vehicle opening fuel & link unassigned fuel entries to this trip so they aren't reused
-    dbService.consumeVehicleOpeningFuel(formData.vehicle, nextTripId);
+      // Consume vehicle opening fuel & link unassigned fuel entries to this trip so they aren't reused
+      dbService.consumeVehicleOpeningFuel(formData.vehicle, nextTripId);
 
-    setToast({ message: `Trip ${nextTripId} registered with ${currentFuel.liters.toFixed(1)} L opening fuel!`, type: 'success' });
-    setFormData({ ...defaultForm });
-    setVehicleFuel({ liters: 0, cost: 0, rate: 0 });
-    setNextTripId(dbService.generateNextID('trips', 'TRP-', 'id'));
+      setToast({ message: `Trip ${nextTripId} registered with ${currentFuel.liters.toFixed(1)} L opening fuel!`, type: 'success' });
+      setFormData({ ...defaultForm });
+      setVehicleFuel({ liters: 0, cost: 0, rate: 0 });
+      setNextTripId(dbService.generateNextID('trips', 'TRP-', 'id'));
+      setTimeout(() => window.location.reload(), 600);
+    } catch (err) {
+      setToast({ message: `Save Failed: ${err.message || 'Database operation failed'}`, type: 'error' });
+    }
   };
 
   return (
