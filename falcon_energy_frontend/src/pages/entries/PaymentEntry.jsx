@@ -239,6 +239,7 @@ export function PaymentEntry() {
                   style={{ fontWeight: '600' }}
                 >
                   <option value="Vendors">Vendors & Suppliers</option>
+                  <option value="Customers">Customers (Receivables & Clients)</option>
                   <option value="Workshops">Workshops (Maintenance)</option>
                   <option value="Fuel Pumps">Fuel Pumps (Fuel Stations)</option>
                   <option value="Drivers">Drivers (Salaries & Advances)</option>

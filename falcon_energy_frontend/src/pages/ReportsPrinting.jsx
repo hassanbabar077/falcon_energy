@@ -647,12 +647,12 @@ function renderPreviewTable(type, data) {
                 {[
                   { label: 'Food & Allowance', amt: expensesBreakdown.foodExpense },
                   { label: 'Toll Tax', amt: expensesBreakdown.tollTax },
-                  { label: 'Other Expenses (Misc/Fines)', amt: expensesBreakdown.otherExpenses },
                   { label: 'Cash Diesel Bought', amt: expensesBreakdown.cashFuelAmt, color: '#f59e0b' },
                   { label: 'Workshop Repair', amt: expensesBreakdown.workshopRepair },
                   { label: 'Loading Charge', amt: expensesBreakdown.loadingCharge },
                   { label: 'Weighbridge / Kanda Fee', amt: expensesBreakdown.kandaScale },
-                  { label: 'Munshiana / Misc', amt: expensesBreakdown.munshiana }
+                  { label: 'Munshiana / Misc', amt: expensesBreakdown.munshiana },
+                  { label: 'Daily Sub-Expenses Sum', amt: expensesBreakdown.totalSubExpenses, color: '#2563eb' }
                 ].filter(item => item.amt > 0).map((item, idx) => (
                   <tr key={idx}>
                     <td style={{ border: '1px solid #e2e8f0', padding: '6px', fontWeight: '600' }}>{item.label}</td>
@@ -793,9 +793,14 @@ function renderPreviewTable(type, data) {
         </div>
 
         {/* Bottom Section: Total Cost Banner */}
-        <div style={{ background: '#dc2626', color: '#ffffff', padding: '14px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: '900', fontSize: '16px' }}>
-          <span>TOTAL TRIP COST (OPERATING EXPENSES + CONSUMED DIESEL):</span>
-          <span style={{ fontFamily: 'monospace', fontSize: '20px' }}>PKR {expensesBreakdown.totalTripCostWithDiesel.toLocaleString()}</span>
+        <div style={{ background: '#0f172a', color: '#ffffff', padding: '16px 20px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontWeight: '900', fontSize: '15px' }}>
+          <div>
+            <div>WHOLE TOTAL TRIP COST (OPERATING + DAILY SUB-EXPENSES + DIESEL)</div>
+            <div style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '600', marginTop: '2px' }}>
+              Operating & Sub-Expenses: PKR {expensesBreakdown.totalExpensesExclDiesel.toLocaleString()} | Diesel Cost: PKR {(expensesBreakdown.totalTripCostWithDiesel - expensesBreakdown.totalExpensesExclDiesel).toLocaleString()}
+            </div>
+          </div>
+          <span style={{ fontFamily: 'monospace', fontSize: '22px', color: '#38bdf8' }}>PKR {expensesBreakdown.totalTripCostWithDiesel.toLocaleString()}</span>
         </div>
       </div>
     );

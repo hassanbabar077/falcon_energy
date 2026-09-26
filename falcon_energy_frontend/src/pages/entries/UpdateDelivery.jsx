@@ -78,9 +78,12 @@ export function UpdateDelivery() {
       loading_charge: trip.loading_charge || '',
       kanda_scale: trip.kanda_scale || '',
       munshiana: trip.munshiana || '',
+      short_surplus_type: trip.short_surplus_type || 'Shortage Penalty (-)',
+      short_surplus_amount: trip.short_surplus_amount || '',
       fine_amount: trip.fine_amount || 0,
       other_expenses: trip.other_expenses || 0,
-      total_cost: trip.total_cost || 0,
+      total_cost: trip.total_cost || trip.amount || 0,
+      net_income: trip.net_income || trip.total_cost || trip.amount || 0,
       payment_status: trip.payment_status || 'Pending',
       customer: trip.customer || '',
       destination: trip.destination === 'Pending' ? '' : trip.destination,
@@ -106,7 +109,7 @@ export function UpdateDelivery() {
     return sum;
   };
 
-  // Recalculate difference, fuel expense, and totals
+  // Recalculate difference, fuel expense, freight revenue and totals
   const handleFieldChange = (key, val) => {
     setSelectedTrip(prev => {
       const updated = { ...prev, [key]: val };
@@ -123,7 +126,7 @@ export function UpdateDelivery() {
       const unload = parseFloat(updated.unload_weight) || 0;
       updated.difference = (load > 0 && unload > 0) ? parseFloat((unload - load).toFixed(2)) : 0;
 
-      // Auto compute freight amount if freight rates entered
+      // Auto compute Gross Freight Amount if freight rates entered
       const type = updated.freight_type;
       let calculatedAmt = parseFloat(updated.amount) || 0;
       if (type === 'Per Ton' && updated.freight_ton_rate) {
@@ -134,12 +137,21 @@ export function UpdateDelivery() {
       }
       updated.amount = calculatedAmt;
 
+      // Net Customer Freight Revenue = Gross Freight Amount +/- Short/Surplus Amount
+      const shortSurplusVal = parseFloat(updated.short_surplus_amount) || 0;
+      let netFreightIncome = calculatedAmt;
+      if (updated.short_surplus_type === 'Addition / Surplus Bonus (+)') {
+        netFreightIncome = calculatedAmt + shortSurplusVal;
+      } else {
+        netFreightIncome = calculatedAmt - shortSurplusVal;
+      }
+
       const optExpensesSum = calcOptionalExpenses(updated);
       const manualOtherExp = parseFloat(updated.other_expenses) || 0;
-      const totalOtherExp = Math.max(optExpensesSum, manualOtherExp);
 
       updated.computed_other_expenses = optExpensesSum > 0 ? optExpensesSum : manualOtherExp;
-      updated.total_cost = Math.max(0, calculatedAmt - totalOtherExp);
+      updated.net_income = Math.max(0, netFreightIncome);
+      updated.total_cost = Math.max(0, netFreightIncome);
 
       return updated;
     });
@@ -192,9 +204,12 @@ export function UpdateDelivery() {
       kanda_scale: parseFloat(selectedTrip.kanda_scale) || 0,
       munshiana: parseFloat(selectedTrip.munshiana) || 0,
 
+      short_surplus_type: selectedTrip.short_surplus_type || 'Shortage Penalty (-)',
+      short_surplus_amount: parseFloat(selectedTrip.short_surplus_amount) || 0,
+      net_income: parseFloat(selectedTrip.net_income) || parseFloat(selectedTrip.total_cost) || 0,
       other_expenses: computedOther,
       fine_amount: computedOther,
-      total_cost: parseFloat(selectedTrip.total_cost) || 0,
+      total_cost: parseFloat(selectedTrip.net_income) || parseFloat(selectedTrip.total_cost) || 0,
       payment_status: selectedTrip.payment_status || 'Pending',
       status: newStatus,
       plant: selectedTrip.plant || '-',
@@ -654,8 +669,8 @@ export function UpdateDelivery() {
                   </div>
 
                   <div className="crud-form-row">
-                    <div className="crud-form-field" style={{ flex: '1 1 calc(33.3% - 8px)' }}>
-                      <label className="crud-form-label"><span>Gross Amount (PKR)</span></label>
+                    <div className="crud-form-field" style={{ flex: '1 1 calc(25% - 9px)' }}>
+                      <label className="crud-form-label"><span>Gross Freight Amount</span></label>
                       <input
                         type="number"
                         value={selectedTrip.amount}
@@ -665,24 +680,37 @@ export function UpdateDelivery() {
                       />
                     </div>
 
-                    <div className="crud-form-field" style={{ flex: '1 1 calc(33.3% - 8px)' }}>
-                      <label className="crud-form-label"><span>Total Expenses (PKR)</span></label>
+                    <div className="crud-form-field" style={{ flex: '1 1 calc(25% - 9px)' }}>
+                      <label className="crud-form-label"><span>Short / Surplus Adjustment</span></label>
+                      <select
+                        value={selectedTrip.short_surplus_type}
+                        onChange={e => handleFieldChange('short_surplus_type', e.target.value)}
+                        className="crud-form-select"
+                      >
+                        <option value="Shortage Penalty (-)">Shortage Penalty (-)</option>
+                        <option value="Addition / Surplus Bonus (+)">Surplus Bonus (+)</option>
+                      </select>
+                    </div>
+
+                    <div className="crud-form-field" style={{ flex: '1 1 calc(25% - 9px)' }}>
+                      <label className="crud-form-label"><span>Short / Surplus Amt (PKR)</span> <span className="crud-optional-tag">(Optional)</span></label>
                       <input
                         type="number"
-                        value={calcOptionalExpenses(selectedTrip) || selectedTrip.other_expenses || selectedTrip.fine_amount || 0}
-                        onChange={e => handleFieldChange('other_expenses', e.target.value)}
+                        placeholder="e.g. 5000"
+                        value={selectedTrip.short_surplus_amount}
+                        onChange={e => handleFieldChange('short_surplus_amount', e.target.value)}
                         className="crud-form-input"
                       />
                     </div>
 
-                    <div className="crud-form-field" style={{ flex: '1 1 calc(33.3% - 8px)' }}>
-                      <label className="crud-form-label"><span>Net Total Cost (PKR)</span></label>
+                    <div className="crud-form-field" style={{ flex: '1 1 calc(25% - 9px)' }}>
+                      <label className="crud-form-label"><span>Net Freight Revenue (Customer)</span></label>
                       <input
                         type="number"
                         readOnly
-                        value={selectedTrip.total_cost}
+                        value={selectedTrip.net_income || selectedTrip.total_cost}
                         className="crud-form-input"
-                        style={{ background: '#f0fdfa', color: '#0d9488', fontWeight: 'bold' }}
+                        style={{ background: '#f0fdfa', color: '#0d9488', fontWeight: '900', fontSize: '15px' }}
                       />
                     </div>
                   </div>

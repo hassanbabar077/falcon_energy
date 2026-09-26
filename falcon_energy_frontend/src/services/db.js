@@ -963,9 +963,20 @@ class DatabaseService {
       }
     });
 
-    // 5. Trips Freight & Subcontractor Costs
+    // 5. Trips Freight (Net Income Billed to Customers or Subcontractor Vendor Costs)
     this.getTable('trips').forEach(tr => {
-      if (isMatch(tr.vendor) || isMatch(tr.transporter) || isMatch(tr.customer) || (category === 'Vehicles' && isMatch(tr.vehicle))) {
+      if (category === 'Customers' && isMatch(tr.customer)) {
+        const netRev = parseFloat(tr.net_income || tr.total_cost || tr.amount) || 0;
+        if (netRev > 0) {
+          totalAccrued += netRev;
+          entries.push({
+            id: `TRP-${tr.id}`,
+            date: tr.loading_date || new Date().toISOString().split('T')[0],
+            description: `Freight Revenue Billed (${tr.vehicle || ''} - ${tr.source} to ${tr.destination})`,
+            total_amount: netRev
+          });
+        }
+      } else if (category !== 'Customers' && (isMatch(tr.vendor) || isMatch(tr.transporter) || (category === 'Vehicles' && isMatch(tr.vehicle)))) {
         const total = parseFloat(tr.total_cost || tr.amount || tr.freight_amount) || 0;
         if (total > 0) {
           totalAccrued += total;
@@ -979,16 +990,20 @@ class DatabaseService {
       }
     });
 
-    // Compute Total Vouchers Paid to this Party across payments and cash_payments
-    const vouchers = this.getTable('payments').filter(p => isMatch(p.party_name) || isMatch(p.paid_to) || isMatch(p.party_id));
-    const totalVouchersPaid = vouchers.reduce((sum, v) => sum + (parseFloat(v.amount) || 0), 0);
+    // Compute Total Payments or Receipts for this Party
+    let grandTotalPaid = 0;
+    if (category === 'Customers') {
+      const customerReceipts = this.getTable('payments_received').filter(pr => isMatch(pr.customer) || isMatch(pr.party_name));
+      grandTotalPaid = customerReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+    } else {
+      const vouchers = this.getTable('payments').filter(p => isMatch(p.party_name) || isMatch(p.paid_to) || isMatch(p.party_id));
+      const totalVouchersPaid = vouchers.reduce((sum, v) => sum + (parseFloat(v.amount) || 0), 0);
+      const cashPayments = this.getTable('cash_payments').filter(c => isMatch(c.paid_to) || isMatch(c.party_name));
+      const totalCashPaid = cashPayments.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
+      grandTotalPaid = totalVouchersPaid + totalCashPaid;
+    }
 
-    const cashPayments = this.getTable('cash_payments').filter(c => isMatch(c.paid_to) || isMatch(c.party_name));
-    const totalCashPaid = cashPayments.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
-
-    const grandTotalPaid = totalVouchersPaid + totalCashPaid;
-
-    // Current Outstanding Balance against Party
+    // Current Outstanding Balance against Party (Receivable for Customer, Payable for Vendor/Others)
     const currentPayableBalance = Math.max(0, totalAccrued - grandTotalPaid);
 
     return {
@@ -1293,8 +1308,10 @@ class DatabaseService {
 
     let totalSubExpenses = journalExpenses.reduce((sum, item) => sum + (item.amount || 0), 0);
 
-    let totalExpensesExclDiesel = foodExpense + tollTax + otherExpenses + trafficFine + cashFuelAmt + workshopRepair + loadingCharge + kandaScale + munshiana + totalSubExpenses;
+    // Calculate Operating Expenses (Excluding duplicate otherExpenses and excluding Diesel)
+    let totalExpensesExclDiesel = foodExpense + tollTax + trafficFine + workshopRepair + loadingCharge + kandaScale + munshiana + totalSubExpenses;
 
+    // Whole Trip Total Cost = (Operating Expenses + Daily Sub-Expenses) + Consumed Diesel Cost
     const totalTripCostWithDiesel = totalExpensesExclDiesel + consumedFuelAmt;
 
     // 5. Trip Net Settlement
@@ -1341,7 +1358,7 @@ class DatabaseService {
       },
       advancesList: advanceBreakdown,
       expensesBreakdown: {
-        foodExpense, tollTax, otherExpenses, trafficFine,
+        foodExpense, tollTax, trafficFine,
         cashFuelAmt, workshopRepair, loadingCharge, kandaScale, munshiana,
         totalSubExpenses, totalExpensesExclDiesel, totalTripCostWithDiesel
       },
