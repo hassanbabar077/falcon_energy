@@ -1,21 +1,22 @@
 import React, { useState, useEffect } from 'react';
-import { Truck, Check, AlertTriangle, Plus, Fuel } from 'lucide-react';
+import { Truck, Check, AlertTriangle, Plus, Fuel, Wallet } from 'lucide-react';
 import { dbService } from '../../services/db';
 
 export function TripEntry() {
   const [vehicles, setVehicles] = useState([]);
   const [drivers, setDrivers] = useState([]);
-  const [vendors, setVendors] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [sources, setSources] = useState([]);
   const [toast, setToast] = useState(null);
   const [vehicleFuel, setVehicleFuel] = useState({ liters: 0, cost: 0, rate: 0 });
+  const [carryAdvance, setCarryAdvance] = useState(0);
 
   const defaultForm = {
     vehicle: '',
     driver: '',
     loading_date: new Date().toISOString().split('T')[0],
     load_pressure: '',
-    vendor: '',
+    supplier: '',
     source: '',
     load_weight: '',
     remarks: ''
@@ -27,7 +28,7 @@ export function TripEntry() {
   useEffect(() => {
     setVehicles(dbService.getTable('vehicles'));
     setDrivers(dbService.getTable('drivers'));
-    setVendors(dbService.getTable('vendors'));
+    setSuppliers(dbService.getTable('suppliers').filter(s => s.status !== 'Inactive'));
     setSources(dbService.getTable('loading_sources'));
     setNextTripId(dbService.generateNextID('trips', 'TRP-', 'id'));
   }, []);
@@ -46,6 +47,7 @@ export function TripEntry() {
 
     const fuelBal = dbService.getVehicleCurrentFuel(val);
     setVehicleFuel(fuelBal);
+    setCarryAdvance(dbService.getVehicleAdvanceBalance(val));
 
     setFormData(prev => ({
       ...prev,
@@ -69,7 +71,7 @@ export function TripEntry() {
       driver: formData.driver || '-',
       loading_date: formData.loading_date,
       load_pressure: parseFloat(formData.load_pressure) || 0,
-      vendor: formData.vendor || '-',
+      supplier: formData.supplier || '-',
       source: formData.source || '-',
       load_weight: parseFloat(formData.load_weight) || 0,
       // Opening Fuel inherited from vehicle's carry-forward / unassigned fuel
@@ -99,14 +101,18 @@ export function TripEntry() {
     };
 
     try {
-      await dbService.insertRecord('trips', tripRecord);
-
-      // Consume vehicle opening fuel & link unassigned fuel entries to this trip so they aren't reused
-      dbService.consumeVehicleOpeningFuel(formData.vehicle, nextTripId);
+      // Save trip + consume vehicle opening fuel (link unassigned fuel entries) in one atomic save
+      // Save trip + take the vehicle's carry-forward advance + consume opening fuel in one atomic save
+      await dbService.transaction(async () => {
+        tripRecord.previous_advance_balance = dbService.takeVehicleAdvanceBalance(formData.vehicle);
+        await dbService.insertRecord('trips', tripRecord);
+        dbService.consumeVehicleOpeningFuel(formData.vehicle, nextTripId);
+      });
 
       setToast({ message: `Trip ${nextTripId} registered with ${currentFuel.liters.toFixed(1)} L opening fuel!`, type: 'success' });
       setFormData({ ...defaultForm });
       setVehicleFuel({ liters: 0, cost: 0, rate: 0 });
+      setCarryAdvance(0);
       setNextTripId(dbService.generateNextID('trips', 'TRP-', 'id'));
       setTimeout(() => window.location.reload(), 600);
     } catch (err) {
@@ -158,6 +164,12 @@ export function TripEntry() {
                   <span>Opening Fuel: {vehicleFuel.liters.toFixed(1)} L (PKR {vehicleFuel.cost.toLocaleString()})</span>
                 </div>
               )}
+              {formData.vehicle && carryAdvance > 0 && (
+                <div className="info-chip info-chip--blue">
+                  <Wallet size={14} />
+                  <span>Carry-forward advance: PKR {carryAdvance.toLocaleString()}</span>
+                </div>
+              )}
             </div>
 
             <div className="crud-form-field" style={{ flex: '1 1 calc(33.3% - 8px)' }}>
@@ -193,19 +205,20 @@ export function TripEntry() {
           <div className="crud-form-row">
             <div className="crud-form-field" style={{ flex: '1 1 calc(50% - 7px)' }}>
               <label className="crud-form-label">
-                <span>Vendor / Contractor</span> <span className="crud-required-star">*</span>
+                <span>Supplier</span> <span className="crud-required-star">*</span>
               </label>
               <select
-                value={formData.vendor}
-                onChange={e => handleChange('vendor', e.target.value)}
+                value={formData.supplier}
+                onChange={e => handleChange('supplier', e.target.value)}
                 className="crud-form-select"
                 required
               >
-                <option value="">Select Vendor</option>
-                {vendors.map(v => (
-                  <option key={v.id} value={v.name}>{v.name}</option>
+                <option value="">Select Supplier</option>
+                {suppliers.map(s => (
+                  <option key={s.id} value={s.business_name || s.name}>{s.business_name || s.name}</option>
                 ))}
               </select>
+              <span className="crud-field-hint">Reference only. Supplier has no payable or receivable.</span>
             </div>
 
             <div className="crud-form-field" style={{ flex: '1 1 calc(50% - 7px)' }}>

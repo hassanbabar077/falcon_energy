@@ -369,9 +369,12 @@ export function CrudPage({ config }) {
     e.preventDefault();
     const newRecord = { ...formData };
     newRecord[recordIdField] = dbService.generateNextID(tableName, idPrefix, recordIdField);
-    if (config.onBeforeSave) config.onBeforeSave(newRecord);
     try {
-      await dbService.insertRecord(tableName, newRecord);
+      // Hook side effects (e.g. stock changes) are saved atomically with the record
+      await dbService.transaction(async () => {
+        if (config.onBeforeSave) config.onBeforeSave(newRecord, { mode: 'add', original: null });
+        await dbService.insertRecord(tableName, newRecord);
+      });
       setIsAddOpen(false);
       setFormData({ ...defaultValues });
       setToast({ message: `Record ${newRecord[recordIdField]} saved to database!`, type: 'success' });
@@ -387,9 +390,12 @@ export function CrudPage({ config }) {
     const updated = { ...editData };
     delete updated[recordIdField];
     delete updated.createdAt;
-    if (config.onBeforeSave) config.onBeforeSave(updated);
+    const original = dbService.getTable(tableName).find(r => r[recordIdField] === editData[recordIdField]) || null;
     try {
-      await dbService.updateRecord(tableName, recordIdField, editData[recordIdField], updated);
+      await dbService.transaction(async () => {
+        if (config.onBeforeSave) config.onBeforeSave(updated, { mode: 'edit', original });
+        await dbService.updateRecord(tableName, recordIdField, editData[recordIdField], updated);
+      });
       setIsEditOpen(false);
       setEditData(null);
       setToast({ message: `Record updated in database!`, type: 'success' });
@@ -403,7 +409,10 @@ export function CrudPage({ config }) {
   const confirmDelete = async () => {
     if (deleteTarget) {
       try {
-        await dbService.deleteRecord(tableName, recordIdField, deleteTarget[recordIdField]);
+        await dbService.transaction(async () => {
+          if (config.onBeforeDelete) config.onBeforeDelete(deleteTarget);
+          await dbService.deleteRecord(tableName, recordIdField, deleteTarget[recordIdField]);
+        });
         setDeleteTarget(null);
         setToast({ message: `Record deleted from database!`, type: 'success' });
         setTimeout(() => window.location.reload(), 600);

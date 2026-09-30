@@ -25,7 +25,7 @@ export const emptyState = () => ({
     { category: 'Bill Type', options: ['Per Ton', 'Per KM', 'Monthly', 'Customer Wise'] },
     { category: 'Tyre Brand Category', options: ['Local', 'Imported'] }
   ],
-  vehicles: [], transporters: [], loading_sources: [], destinations: [], customers: [], drivers: [], vendors: [], trips: [], fines: [], workshops: [], maintenance_heads: [], maintenance: [], document_register: [], tyre_brands: [], tyres_record: [], fuel_pumps: [], fuel_entries: [], engine_oil_defination: [], engine_oil_purchase: [], engine_oil_usage: [], bank_accounts: [], bank_transactions: [], payments: [], general_ledger: [], cash_payments: [], bills_register: [], payments_received: [], payment_history: [],
+  vehicles: [], transporters: [], loading_sources: [], destinations: [], customers: [], drivers: [], vendors: [], suppliers: [], trips: [], fines: [], workshops: [], maintenance_heads: [], maintenance: [], document_register: [], tyre_brands: [], tyres_record: [], fuel_pumps: [], fuel_entries: [], engine_oil_defination: [], engine_oil_purchase: [], engine_oil_usage: [], bank_accounts: [], bank_transactions: [], payments: [], general_ledger: [], cash_payments: [], bills_register: [], payments_received: [], payment_history: [],
   vehicle_categories: [
     { id: 'CAT-001', code: 'CAT-001', name: 'Falcon Energy', status: 'Active', description: 'Falcon Energy fleet vehicles', createdAt: new Date().toISOString() },
     { id: 'CAT-002', code: 'CAT-002', name: 'Rented', status: 'Active', description: 'Rented vehicles', createdAt: new Date().toISOString() },
@@ -89,6 +89,7 @@ export const TABLE_COLUMNS = {
   customers: ['id', 'code', 'business_name', 'contact_person', 'phone', 'email', 'address', 'ntn', 'strn', 'status', 'remarks', 'createdAt', 'updatedAt'],
   drivers: ['id', 'code', 'name', 'father_name', 'cnic', 'license_no', 'license_expiry', 'phone', 'emergency_contact', 'assigned_vehicle', 'status', 'address', 'remarks', 'createdAt', 'updatedAt'],
   vendors: ['id', 'code', 'name', 'vendor_type', 'contact_person', 'phone', 'address', 'ntn', 'status', 'remarks', 'createdAt', 'updatedAt'],
+  suppliers: ['id', 'code', 'name', 'business_name', 'supplier_type', 'contact_person', 'phone', 'email', 'city', 'address', 'status', 'remarks', 'createdAt', 'updatedAt'],
   trips: ['id', 'trip_no', 'loading_date', 'unloading_date', 'vehicle', 'transporter', 'driver', 'source', 'plant', 'destination', 'customer', 'vendor', 'freight_type', 'freight_rate', 'loading_weight', 'unloading_weight', 'weight_diff', 'shortage_allowance', 'shortage_qty', 'shortage_rate', 'shortage_amount', 'total_freight', 'deductions', 'advances', 'net_freight', 'total_cost', 'amount', 'payment_status', 'status', 'remarks', 'createdAt', 'updatedAt'],
   fines: ['id', 'date', 'vehicle', 'driver', 'fine_type', 'location', 'challan_no', 'amount', 'paid_by', 'status', 'remarks', 'createdAt', 'updatedAt'],
   workshops: ['id', 'code', 'name', 'contact_person', 'phone', 'address', 'specialization', 'status', 'remarks', 'createdAt', 'updatedAt'],
@@ -275,6 +276,24 @@ export const TABLE_SCHEMAS = {
     phone VARCHAR(100),
     address TEXT,
     ntn VARCHAR(100),
+    status VARCHAR(50),
+    remarks TEXT,
+    \`createdAt\` VARCHAR(100),
+    \`updatedAt\` VARCHAR(100),
+    raw_data JSON
+  )`,
+
+  suppliers: `CREATE TABLE IF NOT EXISTS \`suppliers\` (
+    id VARCHAR(191) PRIMARY KEY,
+    code VARCHAR(100),
+    name VARCHAR(191),
+    business_name VARCHAR(191),
+    supplier_type VARCHAR(100),
+    contact_person VARCHAR(191),
+    phone VARCHAR(100),
+    email VARCHAR(191),
+    city VARCHAR(191),
+    address TEXT,
     status VARCHAR(50),
     remarks TEXT,
     \`createdAt\` VARCHAR(100),

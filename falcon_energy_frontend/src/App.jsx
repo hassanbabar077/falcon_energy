@@ -25,6 +25,7 @@ import { WorkshopMgmt } from './pages/WorkshopMgmt';
 import { MaintHeadMgmt } from './pages/MaintHeadMgmt';
 import { DocumentMgmt } from './pages/DocumentMgmt';
 import { VendorMgmt } from './pages/VendorMgmt';
+import { SupplierMgmt } from './pages/SupplierMgmt';
 import { DriverMgmt } from './pages/DriverMgmt';
 import { TyreBrandMgmt } from './pages/TyreBrandMgmt';
 import { TyreMgmt } from './pages/TyreMgmt';
@@ -55,7 +56,7 @@ import { dbService } from './services/db';
 
 const MASTER_DATA_IDS = [
   'vehicles', 'transporters', 'sources', 'destinations', 'customers',
-  'workshops', 'maint_heads', 'documents', 'vendors', 'drivers', 'tyres',
+  'workshops', 'maint_heads', 'documents', 'vendors', 'suppliers', 'drivers', 'tyres',
   'tyre_brands', 'cash', 'fuel_pump', 'engine_oil', 'bank_accounts',
   'vehicle_category', 'tanker_ownership'
 ];
@@ -106,9 +107,10 @@ export default function App() {
   useEffect(() => {
     if (dbService.hasApiSession()) dbService.hydrate().finally(() => setDatabaseReady(true));
 
-    // Global listener: Auto-refresh active views whenever database state changes
-    const unsubscribe = dbService.subscribe(() => {
-      setRefreshKey(prev => prev + 1);
+    // Re-mount the active view when fresh shared data arrives from the server.
+    // Local saves are refreshed by the pages themselves so open dialogs survive.
+    const unsubscribe = dbService.subscribe((_data, reason) => {
+      if (reason === 'hydrate') setRefreshKey(prev => prev + 1);
     });
     return () => unsubscribe();
   }, []);
@@ -363,6 +365,7 @@ export default function App() {
     if (activeTab === 'maint_heads')    return <MaintHeadMgmt key={refreshKey} />;
     if (activeTab === 'documents')      return <DocumentMgmt key={refreshKey} />;
     if (activeTab === 'vendors')        return <VendorMgmt key={refreshKey} />;
+    if (activeTab === 'suppliers')      return <SupplierMgmt key={refreshKey} />;
     if (activeTab === 'drivers')        return <DriverMgmt key={refreshKey} />;
     if (activeTab === 'tyres')          return <TyreMgmt key={refreshKey} />;
     if (activeTab === 'tyre_brands')    return <TyreBrandMgmt key={refreshKey} />;
@@ -389,7 +392,7 @@ export default function App() {
     // Reports Child Pages
     if (activeTab.startsWith('rpt_')) {
       const reportType = activeTab.replace('rpt_', '');
-      return <ReportsPrinting key={`${activeTab}-${refreshKey}`} defaultReport={reportType} />;
+      return <ReportsPrinting key={`${activeTab}-${refreshKey}`} defaultReport={reportType} currentUser={currentUser} />;
     }
 
     // Quick Actions

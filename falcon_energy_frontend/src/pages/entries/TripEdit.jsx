@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Edit3, Search, Check, AlertTriangle, X } from 'lucide-react';
+import { Edit3, Check, AlertTriangle, X } from 'lucide-react';
 import { dbService } from '../../services/db';
 
 export function TripEdit() {
   const [trips, setTrips] = useState([]);
   const [vehicles, setVehicles] = useState([]);
-  const [vendors, setVendors] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [sources, setSources] = useState([]);
 
   // Search Filters
@@ -25,7 +25,7 @@ export function TripEdit() {
   const loadData = () => {
     setTrips(dbService.getTable('trips'));
     setVehicles(dbService.getTable('vehicles'));
-    setVendors(dbService.getTable('vendors'));
+    setSuppliers(dbService.getTable('suppliers'));
     setSources(dbService.getTable('loading_sources'));
   };
 
@@ -47,7 +47,7 @@ export function TripEdit() {
       vehicle: editingTrip.vehicle,
       loading_date: editingTrip.loading_date,
       load_pressure: parseFloat(editingTrip.load_pressure) || 0,
-      vendor: editingTrip.vendor,
+      supplier: editingTrip.supplier,
       source: editingTrip.source,
       load_weight: parseFloat(editingTrip.load_weight) || 0,
     };
@@ -145,7 +145,7 @@ export function TripEdit() {
                 <th>Loading Date</th>
                 <th>Vehicle</th>
                 <th>Source Plant</th>
-                <th>Vendor</th>
+                <th>Supplier</th>
                 <th>Load Weight (Tons)</th>
                 <th>Load Pressure</th>
                 <th style={{ textAlign: 'center' }}>Action</th>
@@ -165,12 +165,12 @@ export function TripEdit() {
                     <td>{trip.loading_date}</td>
                     <td><strong>{trip.vehicle}</strong></td>
                     <td>{trip.source}</td>
-                    <td>{trip.vendor}</td>
+                    <td>{trip.supplier || trip.vendor || '-'}</td>
                     <td><strong style={{ color: '#0d9488' }}>{trip.load_weight} T</strong></td>
                     <td>{trip.load_pressure || '-'} PSI</td>
                     <td style={{ textAlign: 'center' }}>
                       <button
-                        onClick={() => setEditingTrip({ ...trip })}
+                        onClick={() => setEditingTrip({ ...trip, supplier: trip.supplier || '' })}
                         className="btn btn-teal"
                         style={{ padding: '5px 12px', fontSize: '11px' }}
                       >
@@ -225,17 +225,21 @@ export function TripEdit() {
 
                   <div className="crud-form-row">
                     <div className="crud-form-field" style={{ flex: '1 1 calc(50% - 7px)' }}>
-                      <label className="crud-form-label">Vendor</label>
+                      <label className="crud-form-label">Supplier</label>
                       <select
-                        value={editingTrip.vendor}
-                        onChange={e => setEditingTrip({ ...editingTrip, vendor: e.target.value })}
+                        value={editingTrip.supplier}
+                        onChange={e => setEditingTrip({ ...editingTrip, supplier: e.target.value })}
                         className="crud-form-select"
                         required
                       >
-                        {vendors.map(v => (
-                          <option key={v.id} value={v.name}>{v.name}</option>
+                        <option value="">Select Supplier</option>
+                        {suppliers.map(s => (
+                          <option key={s.id} value={s.business_name || s.name}>{s.business_name || s.name}</option>
                         ))}
                       </select>
+                      {editingTrip.vendor && !editingTrip.supplier && (
+                        <span className="crud-field-hint">Old vendor on this trip: {editingTrip.vendor}</span>
+                      )}
                     </div>
 
                     <div className="crud-form-field" style={{ flex: '1 1 calc(50% - 7px)' }}>

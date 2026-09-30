@@ -6,6 +6,43 @@ const STORAGE_KEY = 'NOOR_TRANSPORT_DB_V14';
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 const AUTH_TOKEN_KEY = 'noorTransport.apiToken';
 
+// ── Shared helpers ───────────────────────────────────────────────
+export const normText = (v) => String(v ?? '').trim().toLowerCase();
+export const toNum = (v) => parseFloat(v) || 0;
+export const round2 = (v) => Math.round((toNum(v) + Number.EPSILON) * 100) / 100;
+export const todayISO = () => new Date().toISOString().split('T')[0];
+const dateOf = (iso) => (iso ? String(iso).split('T')[0] : '');
+const sumBy = (list, fn) => round2(list.reduce((s, x) => s + toNum(fn(x)), 0));
+
+// Whole days between load and unload dates (load 1st, unload 3rd = 2 days)
+export function daysBetween(fromDate, toDate) {
+  if (!fromDate || !toDate) return null;
+  const a = new Date(`${fromDate}T00:00:00`);
+  const b = new Date(`${toDate}T00:00:00`);
+  if (isNaN(a) || isNaN(b)) return null;
+  return Math.max(0, Math.round((b - a) / 86400000));
+}
+
+// Trip expenses paid by the driver/vehicle out of the trip advance.
+// Diesel (billed by fuel pumps) and mobil oil (issued from stock) are excluded.
+export const DRIVER_EXPENSE_FIELDS = [
+  ['food_expense', 'Food & Allowance'], ['toll_tax', 'Toll Tax'], ['traffic_police', 'Traffic Police'],
+  ['sindh_police', 'Police'], ['custom_police', 'Custom Police'], ['excise_police', 'Excise Police'],
+  ['loading_charge', 'Loading Charge'], ['kanda_scale', 'Weighbridge / Kanda Fee'], ['weighbridge_deduction', 'Weighbridge Deduction'],
+  ['scale_fee', 'Scale Vehicle Fee'], ['munshiana', 'Munshiana / Misc'], ['secretary_challan', 'Secretary Challan'],
+  ['security_guard', 'Security / Chowkidar'], ['service_grease', 'Service & Grease'], ['washing_filter', 'Washing & Net Filter'],
+  ['tyre_expense', 'Tyre Expense'], ['workshop_repair', 'Workshop Repair'], ['driver_salary', 'Driver Salary & Wages'],
+  ['rickshaw_rent', 'Rickshaw / Local Rent'], ['minor_expenses', 'Other Minor Expenses']
+].map(([key, label]) => ({ key, label }));
+
+// Parties that can receive a payment voucher (suppliers are non-financial)
+export const PAYABLE_CATEGORIES = ['Vendors', 'Workshops', 'Fuel Pumps', 'Drivers', 'Vehicles', 'Personal Expenses'];
+
+const CATEGORY_NARRATION = {
+  'Vendors': 'Vendor dues', 'Workshops': 'Workshop maintenance dues', 'Fuel Pumps': 'Fuel dues',
+  'Drivers': 'Driver payment', 'Vehicles': 'Vehicle payment', 'Personal Expenses': 'Personal expense'
+};
+
 // Clean initial state with no dummy seed data
 const INITIAL_DATA = {
   company_info: {
@@ -49,6 +86,7 @@ const INITIAL_DATA = {
   customers: [],
   drivers: [],
   vendors: [],
+  suppliers: [],
   trips: [],
   fines: [],
   workshops: [],
@@ -102,6 +140,7 @@ class DatabaseService {
     this.token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
     this.ready = null;
     this.listeners = new Set();
+    this.inTransaction = false;
   }
 
   subscribe(listener) {
@@ -112,9 +151,10 @@ class DatabaseService {
     return () => {};
   }
 
-  notify() {
+  // reason: 'hydrate' (fresh data from server), 'save' (local change saved), 'rollback'
+  notify(reason = 'save') {
     this.listeners.forEach(fn => {
-      try { fn(this.data); } catch (e) { console.error('Error in DB listener:', e); }
+      try { fn(this.data, reason); } catch (e) { console.error('Error in DB listener:', e); }
     });
   }
 
@@ -134,7 +174,7 @@ class DatabaseService {
         if (payload.state) {
           this.data = payload.state;
           localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-          this.notify();
+          this.notify('hydrate');
         }
       } catch (error) {
         console.warn('Using local data because the API is unavailable:', error.message);
@@ -213,6 +253,26 @@ class DatabaseService {
     }
   }
 
+  // Run several in-memory changes and persist them with ONE save. Inside the
+  // mutator, insertRecord/updateRecord/deleteRecord only change memory; if the
+  // final save (or the mutator) fails, the whole state is restored.
+  async transaction(mutator) {
+    if (this.inTransaction) return mutator();
+    const snapshot = JSON.parse(JSON.stringify(this.data));
+    this.inTransaction = true;
+    try {
+      const result = await mutator();
+      this.inTransaction = false;
+      await this.saveData();
+      return result;
+    } catch (err) {
+      this.inTransaction = false;
+      this.data = snapshot;
+      this.notify('rollback');
+      throw err;
+    }
+  }
+
   // Get table records (returns shallow copy so React state setters trigger re-renders)
   getTable(tableName) {
     return Array.isArray(this.data[tableName]) ? [...this.data[tableName]] : [];
@@ -245,6 +305,7 @@ class DatabaseService {
     const enriched = { ...record, createdAt: now, updatedAt: now };
     const originalList = [...this.data[tableName]];
     this.data[tableName].unshift(enriched);
+    if (this.inTransaction) return enriched;
     try {
       await this.saveData();
       return enriched;
@@ -263,6 +324,7 @@ class DatabaseService {
       const originalItem = { ...list[index] };
       list[index] = { ...list[index], ...updatedFields, updatedAt: now };
       this.data[tableName] = list;
+      if (this.inTransaction) return list[index];
       try {
         await this.saveData();
         return list[index];
@@ -280,6 +342,7 @@ class DatabaseService {
     if (!this.data[tableName]) return false;
     const originalList = [...this.data[tableName]];
     this.data[tableName] = this.data[tableName].filter(item => item[keyField] !== keyVal);
+    if (this.inTransaction) return true;
     try {
       await this.saveData();
       return true;
@@ -293,79 +356,54 @@ class DatabaseService {
   checkMasterDataUsage(tableName, record) {
     if (!record) return null;
 
-    const codeOrId = record.code || record.id || '';
-    const name = record.name || record.business_name || record.number || record.bank_name || '';
+    const keys = [record.code, record.id, record.name, record.business_name, record.number, record.bank_name, record.tanker_number]
+      .map(normText)
+      .filter(v => v && v !== '-');
+    const isMatch = (val) => keys.includes(normText(val));
+    const used = (table, fields) => this.getTable(table).some(r => fields.some(f => isMatch(r[f])));
 
-    const isMatch = (val) => {
-      if (!val) return false;
-      const sVal = String(val).trim().toLowerCase();
-      return (codeOrId && sVal === String(codeOrId).trim().toLowerCase()) ||
-             (name && sVal === String(name).trim().toLowerCase());
+    // [table, label, ...fields that hold the name / code]
+    const checks = {
+      vehicles: [
+        ['trips', 'trips (Trip Entry)', 'vehicle'], ['maintenance', 'maintenance entries', 'vehicle', 'tanker_number'],
+        ['fuel_entries', 'fuel entries', 'vehicle'], ['engine_oil_usage', 'engine oil usage', 'vehicle'],
+        ['cash_payments', 'cash payments', 'vehicle'], ['document_register', 'documents register', 'vehicle'],
+        ['tyres_record', 'tyres record', 'vehicle', 'tanker_number'], ['drivers', 'drivers list', 'assigned_vehicle'],
+        ['payments', 'payment vouchers', 'vehicle']
+      ],
+      transporters: [['vehicles', 'vehicles master', 'transporter']],
+      loading_sources: [['trips', 'trips (Trip Entry)', 'source', 'plant']],
+      destinations: [['trips', 'trips (Trip Entry)', 'destination']],
+      customers: [
+        ['trips', 'trips (Trip Entry)', 'customer'], ['bills_register', 'bills register', 'customer'],
+        ['payments_received', 'payment receipts', 'customer']
+      ],
+      vendors: [
+        ['tyres_record', 'tyre records', 'vendor'], ['engine_oil_purchase', 'engine oil purchases', 'vendor'],
+        ['maintenance', 'maintenance entries', 'vendor'], ['trips', 'trips (old vendor field)', 'vendor'],
+        ['payments', 'payment vouchers', 'party_name']
+      ],
+      suppliers: [['trips', 'trips (Trip Entry)', 'supplier']],
+      drivers: [
+        ['trips', 'trips (Trip Entry)', 'driver'], ['cash_payments', 'cash payments', 'driver'],
+        ['payments', 'payment vouchers', 'driver']
+      ],
+      workshops: [['maintenance', 'maintenance entries', 'workshop'], ['payments', 'payment vouchers', 'party_name']],
+      maintenance_heads: [['maintenance', 'maintenance entries', 'head']],
+      fuel_pumps: [['fuel_entries', 'fuel entries', 'fuel_pump'], ['payments', 'payment vouchers', 'party_name']],
+      engine_oil_defination: [
+        ['engine_oil_purchase', 'engine oil purchases', 'oil_name'], ['engine_oil_usage', 'engine oil usage', 'oil_name']
+      ],
+      tyre_brands: [['tyres_record', 'tyre records', 'brand']],
+      bank_accounts: [
+        ['bank_transactions', 'bank transactions', 'account', 'bank_id'], ['payments', 'payment vouchers', 'bank_id', 'bank_account'],
+        ['payments_received', 'payments received', 'bank', 'bank_id'], ['cash_payments', 'cash payments', 'bank']
+      ]
     };
 
-    if (tableName === 'vehicles') {
-      if (this.getTable('trips').some(t => isMatch(t.vehicle))) return 'trips (Trip Entry)';
-      if (this.getTable('maintenance').some(m => isMatch(m.vehicle))) return 'maintenance entries';
-      if (this.getTable('fuel_entries').some(f => isMatch(f.vehicle))) return 'fuel entries';
-      if (this.getTable('engine_oil_usage').some(e => isMatch(e.vehicle))) return 'engine oil usage';
-      if (this.getTable('cash_payments').some(c => isMatch(c.vehicle))) return 'cash payments';
-      if (this.getTable('document_register').some(d => isMatch(d.vehicle))) return 'documents register';
-      if (this.getTable('tyres_record').some(t => isMatch(t.vehicle))) return 'tyres record';
-      if (this.getTable('drivers').some(d => isMatch(d.assigned_vehicle))) return 'drivers list';
+    for (const [table, label, ...fields] of (checks[tableName] || [])) {
+      if (used(table, fields)) return label;
     }
-
-    if (tableName === 'transporters') {
-      if (this.getTable('vehicles').some(v => isMatch(v.transporter))) return 'vehicles master';
-    }
-
-    if (tableName === 'loading_sources') {
-      if (this.getTable('trips').some(t => isMatch(t.source) || isMatch(t.plant))) return 'trips (Trip Entry)';
-    }
-
-    if (tableName === 'destinations') {
-      if (this.getTable('trips').some(t => isMatch(t.destination))) return 'trips (Trip Entry)';
-    }
-
-    if (tableName === 'customers') {
-      if (this.getTable('trips').some(t => isMatch(t.customer))) return 'trips (Trip Entry)';
-      if (this.getTable('bills_register').some(b => isMatch(b.customer))) return 'bills register';
-    }
-
-    if (tableName === 'vendors') {
-      if (this.getTable('trips').some(t => isMatch(t.vendor))) return 'trips (Trip Entry)';
-    }
-
-    if (tableName === 'drivers') {
-      if (this.getTable('cash_payments').some(c => isMatch(c.driver))) return 'cash payments';
-    }
-
-    if (tableName === 'workshops') {
-      if (this.getTable('maintenance').some(m => isMatch(m.workshop))) return 'maintenance entries';
-    }
-
-    if (tableName === 'maintenance_heads') {
-      if (this.getTable('maintenance').some(m => isMatch(m.head))) return 'maintenance entries';
-    }
-
-    if (tableName === 'fuel_pumps') {
-      if (this.getTable('fuel_entries').some(f => isMatch(f.fuel_pump))) return 'fuel entries';
-    }
-
-    if (tableName === 'engine_oil_defination') {
-      if (this.getTable('engine_oil_purchase').some(p => isMatch(p.oil_name))) return 'engine oil purchases';
-      if (this.getTable('engine_oil_usage').some(u => isMatch(u.oil_name))) return 'engine oil usage';
-    }
-
-    if (tableName === 'tyre_brands') {
-      if (this.getTable('tyres_record').some(t => isMatch(t.brand))) return 'tyre records';
-    }
-
-    if (tableName === 'bank_accounts') {
-      if (this.getTable('bank_transactions').some(b => isMatch(b.account))) return 'bank transactions';
-      if (this.getTable('cash_payments').some(c => isMatch(c.bank))) return 'cash payments';
-      if (this.getTable('payments_received').some(p => isMatch(p.bank))) return 'payments received';
-    }
-
     return null;
   }
 
@@ -421,13 +459,12 @@ class DatabaseService {
     return `${prefix}${pad}${next}`;
   }
 
-  // Engine Oil Stock Tracker
+  // Engine Oil Stock Tracker (memory only - persisted by the caller's save/transaction)
   updateEngineOilStock(oilName, qtyChange) {
     const list = this.data.engine_oil_defination || [];
     const item = list.find(o => o.name === oilName);
     if (item) {
-      item.current_stock = Math.max(0, (item.current_stock || 0) + qtyChange);
-      this.saveData();
+      item.current_stock = Math.max(0, (parseFloat(item.current_stock) || 0) + qtyChange);
       return item.current_stock;
     }
     return 0;
@@ -441,90 +478,35 @@ class DatabaseService {
     return trips.filter(t => t.vehicle && String(t.vehicle).trim().toLowerCase() === norm);
   }
 
-  // Calculate Fuel breakdown per vehicle and trip (Opening fuel vs Additional fuel)
-  getTripVehicleFuelSummary(vehicleNumber = '', tripId = '') {
-    const fuelEntries = this.getTable('fuel_entries');
-    
-    // Sort chronologically by date and createdAt
-    const sorted = [...fuelEntries].sort((a, b) => {
-      const dateA = a.date || a.createdAt || '';
-      const dateB = b.date || b.createdAt || '';
-      return dateA.localeCompare(dateB);
+  // Fuel summary per trip: opening (carried) + purchased in trip - remaining = consumed
+  getFuelTripReport({ vehicle = '', tripId = '', fromDate = '', toDate = '', pump = '' } = {}) {
+    const entries = this.data.fuel_entries || [];
+    const trips = this._sortTrips((this.data.trips || []).filter(t =>
+      (!vehicle || normText(t.vehicle) === normText(vehicle)) &&
+      (!tripId || normText(t.id) === normText(tripId)) &&
+      (!fromDate || (t.loading_date || '') >= fromDate) &&
+      (!toDate || (t.loading_date || '') <= toDate) &&
+      (!pump || entries.some(f => normText(f.trip_id) === normText(t.id) && normText(f.fuel_pump) === normText(pump)))
+    ));
+    return trips.map(t => {
+      const f = this.getTripFuelSummary(t.id);
+      const fills = entries.filter(e => normText(e.trip_id) === normText(t.id) && !e.is_opening_fuel);
+      return {
+        trip_id: t.id,
+        vehicle: t.vehicle,
+        loading_date: t.loading_date,
+        unloading_date: t.unloading_date || '',
+        opening_liters: round2(f.openingLiters),
+        opening_cost: round2(f.openingCost),
+        purchased_liters: round2(f.purchasedLiters),
+        purchased_cost: round2(f.purchasedCost),
+        remaining_liters: round2(f.remainingLiters),
+        consumed_liters: round2(f.consumedLiters),
+        net_expense: round2(t.unloading_date ? (toNum(t.diesel_expense) || f.netFuelExpense) : f.netFuelExpense),
+        fills: fills.length,
+        pumps: [...new Set(fills.map(e => e.fuel_pump).filter(Boolean))].join(', ')
+      };
     });
-
-    const summaryMap = {}; // Key: "vehicle|trip_id"
-
-    sorted.forEach(entry => {
-      if (!entry.vehicle) return;
-      const v = String(entry.vehicle).trim();
-      const t = entry.trip_id ? String(entry.trip_id).trim() : 'No Trip';
-      const key = `${v}|${t}`;
-
-      const liters = parseFloat(entry.liters) || 0;
-      const amount = parseFloat(entry.amount) || 0;
-
-      if (!summaryMap[key]) {
-        summaryMap[key] = {
-          vehicle: v,
-          trip_id: t,
-          opening_liters: liters, // 1st entry is Opening / Already Available Fuel
-          added_liters: 0,
-          total_liters: liters,
-          total_amount: amount,
-          entries_count: 1,
-          entries: [entry]
-        };
-      } else {
-        summaryMap[key].added_liters += liters;
-        summaryMap[key].total_liters += liters;
-        summaryMap[key].total_amount += amount;
-        summaryMap[key].entries_count += 1;
-        summaryMap[key].entries.push(entry);
-      }
-    });
-
-    let results = Object.values(summaryMap);
-
-    if (vehicleNumber) {
-      const normV = String(vehicleNumber).trim().toLowerCase();
-      results = results.filter(r => r.vehicle.toLowerCase() === normV);
-    }
-    if (tripId) {
-      const normT = String(tripId).trim().toLowerCase();
-      results = results.filter(r => r.trip_id.toLowerCase() === normT);
-    }
-
-    return results;
-  }
-
-  // Record Payment Received and auto-create Payment History
-  addPaymentReceived(paymentRecord) {
-    const isCash = paymentRecord.payment_method === 'Cash';
-    const prefix = isCash ? 'CP-' : 'BP-';
-    const paymentId = this.generateNextID('payments_received', prefix, 'payment_id');
-    
-    const record = {
-      ...paymentRecord,
-      payment_id: paymentId,
-      bank: isCash ? '-' : paymentRecord.bank || '-'
-    };
-
-    this.insertRecord('payments_received', record);
-
-    // Auto trigger entry into Payment History
-    const historyId = this.generateNextID('payment_history', 'PH-', 'id');
-    const historyEntry = {
-      id: historyId,
-      payment_id: paymentId,
-      date: paymentRecord.date || new Date().toISOString().split('T')[0],
-      amount: parseFloat(paymentRecord.amount) || 0,
-      type: 'Top Up',
-      reference: isCash ? 'Cash' : 'Bank',
-      remarks: paymentRecord.remarks || `Auto recorded for ${paymentId}`
-    };
-
-    this.insertRecord('payment_history', historyEntry);
-    return record;
   }
 
   // Helper to fetch lookup options by category or dedicated table
@@ -566,74 +548,6 @@ class DatabaseService {
     return [];
   }
 
-  // Record payment received and automatically update selected bank balance (Item 6)
-  async addPaymentReceived(formData) {
-    const prefix = formData.payment_method === 'Cash' ? 'CP-' : 'BP-';
-    const nextId = this.generateNextID('payments_received', prefix, 'payment_id');
-    const amountNum = parseFloat(formData.amount) || 0;
-
-    const record = {
-      id: nextId,
-      payment_id: nextId,
-      date: formData.date || new Date().toISOString().split('T')[0],
-      payment_method: formData.payment_method,
-      bank: formData.bank || '-',
-      amount: amountNum,
-      reference_number: formData.reference_number || '-',
-      remarks: formData.remarks || ''
-    };
-
-    await this.insertRecord('payments_received', record);
-
-    // Also record in payment_history
-    const historyId = this.generateNextID('payment_history', 'HIST-', 'id');
-    const historyRecord = {
-      id: historyId,
-      payment_id: nextId,
-      date: record.date,
-      amount: amountNum,
-      type: 'Received',
-      reference: formData.reference_number || record.date,
-      remarks: formData.remarks || `Payment Received via ${formData.payment_method}`
-    };
-    await this.insertRecord('payment_history', historyRecord);
-
-    // If Bank payment method, add amount to bank_accounts current_balance
-    if (formData.payment_method === 'Bank' && formData.bank) {
-      const bankAccounts = this.getTable('bank_accounts');
-      const bankAcc = bankAccounts.find(b => 
-        String(b.bank_name).trim().toLowerCase() === String(formData.bank).trim().toLowerCase() ||
-        String(b.id).trim().toLowerCase() === String(formData.bank).trim().toLowerCase()
-      );
-      if (bankAcc) {
-        const curBal = parseFloat(bankAcc.current_balance) || 0;
-        const newBal = curBal + amountNum;
-        bankAcc.current_balance = newBal;
-
-        // Record bank transaction credit
-        const txnId = this.generateNextID('bank_transactions', 'TXN-', 'id');
-        const bankTxn = {
-          id: txnId,
-          date: record.date,
-          transaction_type: 'Deposit',
-          account: bankAcc.bank_name,
-          bank_id: bankAcc.id,
-          amount: amountNum,
-          debit: 0,
-          credit: amountNum,
-          reference_id: nextId,
-          party_name: 'Customer / Received',
-          description: `Payment Received (${nextId}) into ${bankAcc.bank_name}`,
-          balance_after: newBal
-        };
-        await this.insertRecord('bank_transactions', bankTxn);
-      }
-    }
-
-    await this.saveData();
-    return record;
-  }
-
   // Get current unassigned fuel balance for a vehicle (opening fuel for next trip)
   getVehicleCurrentFuel(vehicleNumber) {
     if (!vehicleNumber) return { liters: 0, cost: 0, rate: 0 };
@@ -665,30 +579,31 @@ class DatabaseService {
   }
 
   // Consume unassigned fuel balance and lock standalone fuel entries to the new trip
+  // (memory only - call inside dbService.transaction so it is saved with the trip)
   consumeVehicleOpeningFuel(vehicleNumber, tripId) {
     if (!vehicleNumber) return;
     const normV = String(vehicleNumber).trim().toLowerCase();
+    const now = new Date().toISOString();
 
     // 1. Reset current fuel balance on vehicle object so it's not reused
-    const vehicles = this.getTable('vehicles');
-    const veh = vehicles.find(v => 
-      String(v.number).trim().toLowerCase() === normV || 
+    const veh = (this.data.vehicles || []).find(v =>
+      String(v.number).trim().toLowerCase() === normV ||
       String(v.code).trim().toLowerCase() === normV
     );
     if (veh) {
-      this.updateRecord('vehicles', 'code', veh.code, {
-        current_fuel_liters: 0,
-        current_fuel_cost: 0
-      });
+      veh.current_fuel_liters = 0;
+      veh.current_fuel_cost = 0;
+      veh.updatedAt = now;
     }
 
     // 2. Link any standalone unassigned fuel entries for this vehicle to the trip as opening fuel
-    const fuelEntries = this.getTable('fuel_entries');
-    fuelEntries.forEach(fe => {
+    (this.data.fuel_entries || []).forEach(fe => {
       const matchVeh = fe.vehicle && String(fe.vehicle).trim().toLowerCase() === normV;
       const noTrip = !fe.trip_id || fe.trip_id === '-' || String(fe.trip_id).trim() === '';
       if (matchVeh && noTrip && tripId) {
-        this.updateRecord('fuel_entries', 'id', fe.id, { trip_id: tripId, is_opening_fuel: true });
+        fe.trip_id = tripId;
+        fe.is_opening_fuel = true;
+        fe.updatedAt = now;
       }
     });
   }
@@ -704,7 +619,8 @@ class DatabaseService {
     let openingLiters = trip ? (parseFloat(trip.opening_fuel_liters) || 0) : 0;
     let openingCost = trip ? (parseFloat(trip.opening_fuel_cost) || 0) : 0;
 
-    if (openingLiters === 0 && trip && trip.vehicle) {
+    // Only trips saved before opening fuel was recorded borrow the vehicle's current balance
+    if (trip && trip.vehicle && (trip.opening_fuel_liters === undefined || trip.opening_fuel_liters === null || trip.opening_fuel_liters === '')) {
       const vehFuel = this.getVehicleCurrentFuel(trip.vehicle);
       openingLiters = vehFuel.liters;
       openingCost = vehFuel.cost;
@@ -714,8 +630,7 @@ class DatabaseService {
     const fuelEntries = this.getTable('fuel_entries');
     const tripFuelEntries = fuelEntries.filter(fe => 
       fe.trip_id && String(fe.trip_id).trim().toLowerCase() === normId &&
-      !fe.is_opening_fuel &&
-      !(openingLiters > 0 && parseFloat(fe.liters || fe.qty) === openingLiters)
+      !fe.is_opening_fuel
     );
     
     let purchasedLiters = 0;
@@ -763,6 +678,10 @@ class DatabaseService {
 
   // Finalize trip fuel accounting on delivery update and carry forward remaining fuel to vehicle
   async updateTripDeliveryWithFuel(tripId, deliveryData) {
+    return this.transaction(() => this._updateTripDeliveryWithFuel(tripId, deliveryData));
+  }
+
+  async _updateTripDeliveryWithFuel(tripId, deliveryData) {
     const normId = String(tripId).trim().toLowerCase();
     const trips = this.getTable('trips');
     const trip = trips.find(t => String(t.id).trim().toLowerCase() === normId || String(t.code).trim().toLowerCase() === normId);
@@ -787,261 +706,522 @@ class DatabaseService {
     };
 
     // Update trip record
-    const updatedTrip = await this.updateRecord('trips', 'id', trip.id, updatedTripPayload);
+    await this.updateRecord('trips', 'id', trip.id, updatedTripPayload);
+    const live = this._findTrip(trip.id);
+    const veh = this._findVehicle(trip.vehicle);
 
-    // Carry forward remaining fuel & its cost as opening fuel for this vehicle's NEXT trip!
-    if (trip.vehicle) {
-      const normV = String(trip.vehicle).trim().toLowerCase();
-      const vehicles = this.getTable('vehicles');
-      const veh = vehicles.find(v => 
-        String(v.number).trim().toLowerCase() === normV || 
-        String(v.code).trim().toLowerCase() === normV
-      );
-      if (veh) {
-        await this.updateRecord('vehicles', 'code', veh.code, {
-          current_fuel_liters: remainingLiters,
-          current_fuel_cost: remainingCost
-        });
-      }
+    // Is there a newer trip for this vehicle already? Then its opening fuel is already fixed.
+    const hasLaterTrip = (this.data.trips || []).some(t =>
+      t.id !== trip.id && normText(t.vehicle) === normText(trip.vehicle) &&
+      String(t.createdAt || '') > String(trip.createdAt || ''));
+
+    // Carry forward remaining fuel & its cost as opening fuel for this vehicle's NEXT trip
+    if (veh && !hasLaterTrip) {
+      veh.current_fuel_liters = remainingLiters;
+      veh.current_fuel_cost = remainingCost;
     }
 
-    return updatedTrip;
+    // Advance settlement: carry-forward + trip advances - driver-paid expenses
+    const settlement = this.getTripSettlement(trip.id);
+    const previousCarry = round2(trip.carry_forward); // value from an earlier save of this delivery
+    Object.assign(live, {
+      advance_total: settlement.advanceTotal,
+      trip_expenses_total: settlement.expenseTotal,
+      settlement_balance: settlement.balance,
+      final_due: settlement.finalDue,
+      carry_forward: settlement.carryForward
+    });
+    if (veh) {
+      // Surplus goes to the vehicle for its next trip (adjusted by the difference on re-save)
+      veh.advance_balance = Math.max(0, round2(toNum(veh.advance_balance) + settlement.carryForward - previousCarry));
+      veh.updatedAt = new Date().toISOString();
+    }
+
+    return live;
   }
 
-  // Get distinct list of entities for a selected payment category
+  // ─────────────────────────────────────────────────────────────
+  // PARTY ACCOUNTING ENGINE
+  // Charges = what a party billed us (payables) or what a customer owes us
+  // (receivables). Payments = vouchers / receipts against them.
+  // Parties are matched by EXACT name / code / id, never by substring.
+  // Suppliers are non-financial and never appear here.
+  // ─────────────────────────────────────────────────────────────
+
+  // Distinct list of parties for a payment / receipt category
   getPartyListByCategory(category) {
-    const namesSet = new Set();
+    const names = new Set();
+    const add = (v) => {
+      const s = String(v ?? '').trim();
+      if (s && s !== '-' && s !== 'Pending') names.add(s);
+    };
+    const T = (t) => this.getTable(t);
 
-    if (category === 'Vendors') {
-      this.getTable('vendors').forEach(v => v.name && namesSet.add(v.name));
-      this.getTable('tyres_record').forEach(t => t.vendor && namesSet.add(t.vendor));
-      this.getTable('engine_oil_purchase').forEach(e => e.vendor && namesSet.add(e.vendor));
-      this.getTable('trips').forEach(tr => tr.vendor && namesSet.add(tr.vendor));
-    } else if (category === 'Workshops') {
-      this.getTable('workshops').forEach(w => w.name && namesSet.add(w.name));
-      this.getTable('maintenance').forEach(m => m.workshop && namesSet.add(m.workshop));
-    } else if (category === 'Fuel Pumps') {
-      this.getTable('fuel_pumps').forEach(f => f.name && namesSet.add(f.name));
-      this.getTable('fuel_entries').forEach(fe => fe.fuel_pump && namesSet.add(fe.fuel_pump));
-    } else if (category === 'Drivers') {
-      this.getTable('drivers').forEach(d => d.name && namesSet.add(d.name));
-    } else if (category === 'Personal Expenses' || category === 'Personal Expense') {
-      namesSet.add('Personal Expense');
-      namesSet.add('Director Expense / Salary');
-      namesSet.add('Office Petty Cash / Misc');
-      namesSet.add('Staff Expenses');
-      this.getTable('cash_payments').forEach(c => c.category === 'Personal Expense' && c.paid_to && namesSet.add(c.paid_to));
-    } else if (category === 'Vehicles') {
-      this.getTable('vehicles').forEach(v => v.number && namesSet.add(v.number));
-      this.getTable('transporters').forEach(t => t.name && namesSet.add(t.name));
-    } else if (category === 'Tyres') {
-      this.getTable('tyre_brands').forEach(b => b.brand_name && namesSet.add(b.brand_name));
-      this.getTable('tyres_record').forEach(t => t.vendor && namesSet.add(t.vendor));
+    switch (category) {
+      case 'Vendors':
+        T('vendors').forEach(v => add(v.business_name || v.name));
+        T('tyres_record').forEach(t => add(t.vendor));
+        T('engine_oil_purchase').forEach(o => add(o.vendor || o.supplier));
+        break;
+      case 'Workshops':
+        T('workshops').forEach(w => add(w.name || w.business_name));
+        T('maintenance').forEach(m => add(m.workshop));
+        break;
+      case 'Fuel Pumps':
+        T('fuel_pumps').forEach(p => add(p.name));
+        T('fuel_entries').forEach(f => add(f.fuel_pump));
+        break;
+      case 'Drivers':
+        T('drivers').forEach(d => add(d.name));
+        T('trips').forEach(t => add(t.driver));
+        break;
+      case 'Vehicles':
+        T('vehicles').forEach(v => add(v.number));
+        break;
+      case 'Customers':
+        T('customers').forEach(c => add(c.name || c.business_name));
+        T('trips').forEach(t => add(t.customer));
+        break;
+      case 'Personal Expenses':
+      case 'Personal Expense':
+        ['Personal Expense', 'Director Expense / Salary', 'Office Petty Cash / Misc', 'Staff Expenses'].forEach(add);
+        break;
+      default:
+        break;
     }
-
-    return Array.from(namesSet).filter(Boolean).sort();
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
   }
 
-  // Get total accrued cost, total paid, net current payable balance, and entry references for a party
-  getPartyPayableSummary(category, partyInput) {
-    if (!partyInput) {
-      return { totalAccruedCost: 0, totalPaidAmount: 0, currentPayableBalance: 0, entries: [] };
+  // All names / codes / ids that identify the same party
+  _partyAliases(partyInput) {
+    const aliases = new Set();
+    const add = (v) => { const s = normText(v); if (s && s !== '-') aliases.add(s); };
+    const addAll = (item) => ['id', 'code', 'name', 'business_name', 'number', 'tanker_number'].forEach(k => add(item[k]));
+
+    if (partyInput && typeof partyInput === 'object') {
+      addAll(partyInput);
+      return aliases;
     }
+    const input = normText(partyInput);
+    add(input);
+    ['vendors', 'workshops', 'fuel_pumps', 'vehicles', 'customers', 'drivers', 'transporters'].forEach(table => {
+      (this.data[table] || []).forEach(item => {
+        const keys = ['id', 'code', 'name', 'business_name', 'number'].map(k => normText(item[k]));
+        if (keys.includes(input)) addAll(item);
+      });
+    });
+    return aliases;
+  }
 
-    // 1. Build comprehensive set of target match strings (lowercased)
-    const matchTargets = new Set();
-    const addTarget = (str) => {
-      if (str !== null && str !== undefined && String(str).trim() !== '' && String(str).trim() !== '-') {
-        matchTargets.add(String(str).trim().toLowerCase());
-      }
+  _tripRoute(t) {
+    if (!t) return '';
+    const dest = t.destination && t.destination !== 'Pending' && t.destination !== '-' ? t.destination : '';
+    return [t.source && t.source !== '-' ? t.source : '', dest].filter(Boolean).join(' → ');
+  }
+
+  // Charges + payments of one party (or every party of the category when partyInput is empty)
+  getPartyTransactions(category, partyInput = '', { tripId = '', vehicle = '' } = {}) {
+    const all = !partyInput || (typeof partyInput === 'string' && !partyInput.trim());
+    const aliases = all ? null : this._partyAliases(partyInput);
+    const is = (val) => {
+      const s = normText(val);
+      if (!s || s === '-' || s === 'pending') return false;
+      return all ? true : aliases.has(s);
     };
+    const txns = [];
+    const charge = (o) => txns.push({ kind: 'charge', trip_id: '', vehicle: '', ...o, amount: round2(o.amount) });
+    const payment = (o) => txns.push({ kind: 'payment', trip_id: '', vehicle: '', ...o, amount: round2(o.amount) });
+    const T = (t) => this.getTable(t);
 
-    if (typeof partyInput === 'object') {
-      addTarget(partyInput.id);
-      addTarget(partyInput.code);
-      addTarget(partyInput.name);
-      addTarget(partyInput.business_name);
-      addTarget(partyInput.number);
-      addTarget(partyInput.tanker_number);
-    } else {
-      const pStr = String(partyInput).trim();
-      addTarget(pStr);
-
-      // Search all master tables to find associated ID or Business Name if string was passed
-      const masterTables = ['vendors', 'workshops', 'fuel_pumps', 'transporters', 'vehicles', 'customers', 'drivers'];
-      const normInput = pStr.toLowerCase();
-
-      masterTables.forEach(tName => {
-        (this.getTable(tName) || []).forEach(item => {
-          const itemID = String(item.id || item.code || '').toLowerCase();
-          const itemName = String(item.name || item.business_name || item.number || '').toLowerCase();
-          if (itemID === normInput || itemName === normInput || (normInput.length >= 3 && (itemName.includes(normInput) || normInput.includes(itemName)))) {
-            addTarget(item.id);
-            addTarget(item.code);
-            addTarget(item.name);
-            addTarget(item.business_name);
-            addTarget(item.number);
-            addTarget(item.tanker_number);
-          }
+    // ---- Charges ----
+    if (category === 'Vendors') {
+      T('tyres_record').forEach(t => {
+        if (!is(t.vendor)) return;
+        const veh = t.vehicle || t.tanker_number || '';
+        charge({
+          date: t.purchase_date || dateOf(t.createdAt), ref: t.id, party: t.vendor, vehicle: veh,
+          amount: t.total_amount || t.amount || t.cost,
+          description: `Tyre purchase · ${[t.brand, t.tyre_number].filter(Boolean).join(' ') || 'Tyre'}${veh ? ` · ${veh}` : ''}`
+        });
+      });
+      T('engine_oil_purchase').forEach(o => {
+        const v = o.vendor || o.supplier;
+        if (!is(v)) return;
+        charge({
+          date: o.date || dateOf(o.createdAt), ref: o.id, party: v, amount: o.amount || o.total_amount,
+          description: `Engine oil purchase · ${o.oil_name || 'Oil'} · ${toNum(o.quantity)} L`
+        });
+      });
+      T('maintenance').forEach(m => {
+        if (!m.vendor || !is(m.vendor)) return;
+        charge({
+          date: m.date || dateOf(m.createdAt), ref: m.id, party: m.vendor, vehicle: m.vehicle || '',
+          amount: m.total_amount || m.amount || m.cost,
+          description: `Maintenance parts · ${m.head || 'Service'} · ${m.vehicle || m.tanker_number || ''}`
         });
       });
     }
 
-    const targetList = Array.from(matchTargets);
-
-    const isMatch = (val) => {
-      if (!val || val === '-' || val === 'Pending') return false;
-      const sVal = String(val).trim().toLowerCase();
-      for (const target of targetList) {
-        if (sVal === target) return true;
-        if (sVal.length >= 3 && target.length >= 3) {
-          if (sVal.includes(target) || target.includes(sVal)) return true;
-        }
-      }
-      return false;
-    };
-
-    const entries = [];
-    let totalAccrued = 0;
-
-    // 1. Tyre Purchases
-    this.getTable('tyres_record').forEach(t => {
-      if (isMatch(t.vendor) || isMatch(t.brand) || (category === 'Vehicles' && isMatch(t.vehicle))) {
-        const total = parseFloat(t.total_amount || t.amount || t.cost) || 0;
-        totalAccrued += total;
-        entries.push({
-          id: `TYR-${t.id}`,
-          date: t.purchase_date || t.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          description: `Tyre Purchase (${t.brand || ''} - ${t.tyre_number || ''})`,
-          total_amount: total
+    if (category === 'Workshops') {
+      T('maintenance').forEach(m => {
+        if (!is(m.workshop)) return;
+        const veh = m.vehicle || m.tanker_number || '';
+        charge({
+          date: m.date || dateOf(m.createdAt), ref: m.id, party: m.workshop, vehicle: veh,
+          amount: m.total_amount || m.amount || m.cost,
+          description: `Maintenance · ${m.head || 'Service'}${veh ? ` · ${veh}` : ''}${m.type ? ` (${m.type})` : ''}`
         });
-      }
-    });
-
-    // 2. Maintenance & Workshop Entries
-    this.getTable('maintenance').forEach(m => {
-      if (isMatch(m.workshop) || isMatch(m.vendor) || (category === 'Vehicles' && (isMatch(m.vehicle) || isMatch(m.tanker_number)))) {
-        const total = parseFloat(m.total_amount || m.amount || m.cost) || 0;
-        totalAccrued += total;
-        entries.push({
-          id: `MIN-${m.id}`,
-          date: m.date || new Date().toISOString().split('T')[0],
-          description: `Maintenance (${m.head || 'Service'} - ${m.vehicle || m.tanker_number || ''})`,
-          total_amount: total
-        });
-      }
-    });
-
-    // 3. Fuel Entries
-    this.getTable('fuel_entries').forEach(f => {
-      if (isMatch(f.fuel_pump) || isMatch(f.vendor) || (category === 'Vehicles' && isMatch(f.vehicle))) {
-        const total = parseFloat(f.amount || f.total_amount || f.total_cost) || 0;
-        const liters = f.liters ? `${f.liters}L` : 'Fuel';
-        const veh = f.vehicle ? ` (${f.vehicle})` : '';
-        const rate = f.rate ? ` @ PKR ${f.rate}/L` : '';
-        totalAccrued += total;
-        entries.push({
-          id: `FE-${f.id}`,
-          date: f.date || new Date().toISOString().split('T')[0],
-          description: `Fuel Fill ${liters}${veh}${rate}`,
-          total_amount: total
-        });
-      }
-    });
-
-    // 4. Engine Oil Purchases
-    this.getTable('engine_oil_purchase').forEach(o => {
-      if (isMatch(o.vendor) || isMatch(o.supplier)) {
-        const total = parseFloat(o.amount || o.total_amount || o.total_cost) || 0;
-        totalAccrued += total;
-        entries.push({
-          id: `ENO-${o.id}`,
-          date: o.date || new Date().toISOString().split('T')[0],
-          description: `Engine Oil Purchase (${o.oil_name} - Qty ${o.quantity})`,
-          total_amount: total
-        });
-      }
-    });
-
-    // 5. Trips Freight (Net Income Billed to Customers or Subcontractor Vendor Costs)
-    this.getTable('trips').forEach(tr => {
-      if (category === 'Customers' && isMatch(tr.customer)) {
-        const netRev = parseFloat(tr.net_income || tr.total_cost || tr.amount) || 0;
-        if (netRev > 0) {
-          totalAccrued += netRev;
-          entries.push({
-            id: `TRP-${tr.id}`,
-            date: tr.loading_date || new Date().toISOString().split('T')[0],
-            description: `Freight Revenue Billed (${tr.vehicle || ''} - ${tr.source} to ${tr.destination})`,
-            total_amount: netRev
-          });
-        }
-      } else if (category !== 'Customers' && (isMatch(tr.vendor) || isMatch(tr.transporter) || (category === 'Vehicles' && isMatch(tr.vehicle)))) {
-        const total = parseFloat(tr.total_cost || tr.amount || tr.freight_amount) || 0;
-        if (total > 0) {
-          totalAccrued += total;
-          entries.push({
-            id: `TRP-${tr.id}`,
-            date: tr.loading_date || new Date().toISOString().split('T')[0],
-            description: `Trip Freight (${tr.vehicle || ''} - ${tr.source} to ${tr.destination})`,
-            total_amount: total
-          });
-        }
-      }
-    });
-
-    // Compute Total Payments or Receipts for this Party
-    let grandTotalPaid = 0;
-    if (category === 'Customers') {
-      const customerReceipts = this.getTable('payments_received').filter(pr => isMatch(pr.customer) || isMatch(pr.party_name));
-      grandTotalPaid = customerReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-    } else {
-      const vouchers = this.getTable('payments').filter(p => isMatch(p.party_name) || isMatch(p.paid_to) || isMatch(p.party_id));
-      const totalVouchersPaid = vouchers.reduce((sum, v) => sum + (parseFloat(v.amount) || 0), 0);
-      const cashPayments = this.getTable('cash_payments').filter(c => isMatch(c.paid_to) || isMatch(c.party_name));
-      const totalCashPaid = cashPayments.reduce((sum, c) => sum + (parseFloat(c.amount) || 0), 0);
-      grandTotalPaid = totalVouchersPaid + totalCashPaid;
+      });
     }
 
-    // Current Outstanding Balance against Party (Receivable for Customer, Payable for Vendor/Others)
-    const currentPayableBalance = Math.max(0, totalAccrued - grandTotalPaid);
+    if (category === 'Fuel Pumps') {
+      T('fuel_pumps').forEach(p => {
+        if (toNum(p.opening_payable) > 0 && is(p.name)) {
+          charge({ date: dateOf(p.createdAt), ref: p.id, party: p.name, amount: p.opening_payable, description: 'Opening payable balance' });
+        }
+      });
+      T('fuel_entries').forEach(f => {
+        if (!is(f.fuel_pump)) return;
+        const liters = toNum(f.liters);
+        const amount = toNum(f.amount || f.total_amount);
+        const rate = liters > 0 ? Math.round(amount / liters) : 0;
+        charge({
+          date: f.date || dateOf(f.createdAt), ref: f.id, party: f.fuel_pump, vehicle: f.vehicle || '', trip_id: f.trip_id || '',
+          amount,
+          description: `Fuel ${liters} L${rate ? ` @ ${rate}/L` : ''}${f.vehicle ? ` · ${f.vehicle}` : ''}${f.trip_id && f.trip_id !== '-' ? ` · ${f.trip_id}` : ''}`
+        });
+      });
+    }
+
+    if (category === 'Vehicles') {
+      T('trips').forEach(t => {
+        if (!is(t.vehicle) || toNum(t.final_due) <= 0) return;
+        charge({
+          date: t.unloading_date || t.loading_date, ref: t.id, party: t.vehicle, vehicle: t.vehicle, trip_id: t.id,
+          amount: t.final_due,
+          description: `Trip ${t.id} final due (expenses exceeded advance)${this._tripRoute(t) ? ` · ${this._tripRoute(t)}` : ''}`
+        });
+      });
+    }
+
+    if (category === 'Customers') {
+      T('trips').forEach(t => {
+        const income = toNum(t.net_income) || toNum(t.total_cost);
+        if (!t.unloading_date || income <= 0 || !is(t.customer)) return;
+        charge({
+          date: t.unloading_date, ref: t.id, party: t.customer, vehicle: t.vehicle || '', trip_id: t.id, amount: income,
+          description: `Freight ${t.id} · ${t.vehicle || ''}${this._tripRoute(t) ? ` · ${this._tripRoute(t)}` : ''}${t.unload_weight ? ` · ${t.unload_weight} T` : ''}`
+        });
+      });
+    }
+
+    // ---- Payments / receipts ----
+    if (category === 'Customers') {
+      T('payments_received').forEach(pr => {
+        const c = pr.customer || pr.party_name;
+        if (!is(c)) return;
+        payment({
+          date: pr.date || dateOf(pr.createdAt), ref: pr.payment_id || pr.id, party: c, amount: pr.amount,
+          description: pr.description || `Receipt ${pr.payment_id || pr.id}${pr.bank && pr.bank !== '-' ? ` · ${pr.bank}` : ''}`
+        });
+      });
+    } else {
+      T('payments').forEach(p => {
+        const type = p.payment_type || 'Payment';
+        if (type === 'Advance') return; // advances are consumed inside each trip's settlement
+        const pDate = p.payment_date || p.date || dateOf(p.createdAt);
+        const ref = p.voucher_no || p.id;
+
+        if (type === 'Settlement') {
+          // Final dues belong to the vehicle, whoever the voucher was issued to
+          if (category !== 'Vehicles') return;
+          const veh = p.vehicle || this._findTrip(p.trip_id)?.vehicle;
+          if (!is(veh)) return;
+          payment({ date: pDate, ref, party: veh, vehicle: veh, trip_id: p.trip_id || '', amount: p.amount, description: p.description || `Final due settlement ${p.trip_id || ''}` });
+          return;
+        }
+
+        const party = p.party_name || p.paid_to || p.party_id;
+        if (!is(party)) return;
+        if (p.party_category && p.party_category !== category) return;
+        if (all && !p.party_category) return;
+        payment({
+          date: pDate, ref, party, vehicle: p.vehicle || '', trip_id: p.trip_id || '', amount: p.amount,
+          description: p.description || `Payment voucher ${ref}${p.source_name ? ` · ${p.source_name}` : ''}${p.remarks ? ` · ${p.remarks}` : ''}`
+        });
+      });
+
+      // Older direct cash payments to a named party
+      if (!all) {
+        T('cash_payments').forEach(c => {
+          if (c.voucher_no || !is(c.paid_to)) return;
+          payment({
+            date: c.date || dateOf(c.createdAt), ref: c.id, party: c.paid_to, amount: c.amount,
+            description: c.description || `Cash payment ${c.id}${c.remarks ? ` · ${c.remarks}` : ''}`
+          });
+        });
+      }
+    }
+
+    return txns
+      .filter(t => (!tripId || normText(t.trip_id) === normText(tripId)) && (!vehicle || normText(t.vehicle) === normText(vehicle)))
+      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  }
+
+  // Total charged, total paid, outstanding balance and charge list for a party
+  getPartyPayableSummary(category, partyInput) {
+    const empty = { totalAccruedCost: 0, totalPaidAmount: 0, currentPayableBalance: 0, pendingItems: [], entries: [], lastDate: '' };
+    if (!partyInput) return empty;
+
+    const txns = this.getPartyTransactions(category, partyInput);
+    const charges = txns.filter(t => t.kind === 'charge');
+    const accrued = sumBy(charges, c => c.amount);
+    const paid = sumBy(txns.filter(t => t.kind === 'payment'), p => p.amount);
+    const entries = charges.map(c => ({ id: c.ref, date: c.date, description: c.description, total_amount: c.amount, trip_id: c.trip_id }));
 
     return {
-      totalAccruedCost: totalAccrued,
-      totalPaidAmount: grandTotalPaid,
-      currentPayableBalance: currentPayableBalance,
-      pendingItems: entries, // Entry reference list showing total amount
-      entries: entries
+      totalAccruedCost: accrued,
+      totalPaidAmount: paid,
+      currentPayableBalance: Math.max(0, round2(accrued - paid)),
+      pendingItems: entries,
+      entries,
+      lastDate: charges.length ? charges[charges.length - 1].date : ''
     };
   }
 
-  // Get Party-centric pending payables overview list across all categories
-  getPendingPayables() {
-    const categories = ['Vendors', 'Workshops', 'Fuel Pumps', 'Drivers', 'Vehicles'];
-    const payablesList = [];
-
+  _outstandingList(categories, { party = '' } = {}) {
+    const labels = { 'Vendors': 'Vendor', 'Workshops': 'Workshop', 'Fuel Pumps': 'Fuel Pump', 'Vehicles': 'Vehicle', 'Drivers': 'Driver', 'Customers': 'Customer' };
+    const list = [];
     categories.forEach(cat => {
-      const parties = this.getPartyListByCategory(cat);
-      parties.forEach(partyName => {
-        const summary = this.getPartyPayableSummary(cat, partyName);
-        if (summary.currentPayableBalance > 0) {
-          payablesList.push({
-            id: `PAY-${partyName}`,
-            reference_id: `PARTY-${partyName}`,
-            date: new Date().toISOString().split('T')[0],
-            party_type: cat.slice(0, -1), // e.g. Vendor, Workshop, Fuel Pump
-            party_name: partyName,
-            description: `Accumulated balance across ${summary.entries.length} entry record(s)`,
-            total_amount: summary.totalAccruedCost,
-            paid_amount: summary.totalPaidAmount,
-            remaining_amount: summary.currentPayableBalance,
-            payment_status: summary.totalPaidAmount > 0 ? 'In Process' : 'Pending'
-          });
-        }
+      this.getPartyListByCategory(cat).forEach(name => {
+        if (party && normText(party) !== normText(name)) return;
+        const s = this.getPartyPayableSummary(cat, name);
+        if (s.currentPayableBalance <= 0.009) return;
+        list.push({
+          id: `${cat}|${name}`,
+          reference_id: `PARTY-${name}`,
+          date: s.lastDate || todayISO(),
+          category: cat,
+          party_type: labels[cat] || cat,
+          party_name: name,
+          description: `${s.entries.length} bill(s)${s.lastDate ? ` · last on ${s.lastDate}` : ''}`,
+          total_amount: s.totalAccruedCost,
+          paid_amount: s.totalPaidAmount,
+          remaining_amount: s.currentPayableBalance,
+          payment_status: s.totalPaidAmount > 0 ? 'Partially Paid' : 'Unpaid'
+        });
       });
     });
+    return list.sort((a, b) => b.remaining_amount - a.remaining_amount);
+  }
 
-    return payablesList;
+  // Everything the company still has to pay (vendors, workshops, fuel pumps, vehicle final dues)
+  getPendingPayables(filters = {}) {
+    const cats = filters.category ? [filters.category] : ['Vendors', 'Workshops', 'Fuel Pumps', 'Vehicles'];
+    return this._outstandingList(cats, filters);
+  }
+
+  // Everything customers still have to pay us
+  getPendingReceivables(filters = {}) {
+    return this._outstandingList(['Customers'], { party: filters.customer || filters.party || '' });
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // TRIP ADVANCE & SETTLEMENT (tracked per vehicle)
+  // previous carry-forward + advances paid for the trip - driver-paid trip
+  // expenses = balance. Negative → FINAL DUE payable to the vehicle.
+  // Positive → carried forward as opening advance for the vehicle's next trip.
+  // ─────────────────────────────────────────────────────────────
+
+  _findTrip(tripId) {
+    if (!tripId) return null;
+    const n = normText(tripId);
+    return (this.data.trips || []).find(t => normText(t.id) === n) || null;
+  }
+
+  _findVehicle(vehicle) {
+    if (!vehicle) return null;
+    const n = normText(vehicle);
+    return (this.data.vehicles || []).find(v => normText(v.number) === n || normText(v.code) === n) || null;
+  }
+
+  _sortTrips(list) {
+    return [...list].sort((a, b) =>
+      String(a.loading_date || '').localeCompare(String(b.loading_date || '')) ||
+      String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+    );
+  }
+
+  // Carry-forward advance balance of a vehicle (surplus from its previous trip)
+  getVehicleAdvanceBalance(vehicle) {
+    return round2(this._findVehicle(vehicle)?.advance_balance);
+  }
+
+  // Take the vehicle's carry-forward balance for a new trip (memory only - use inside a transaction)
+  takeVehicleAdvanceBalance(vehicle) {
+    const veh = this._findVehicle(vehicle);
+    if (!veh) return 0;
+    const amount = round2(veh.advance_balance);
+    veh.advance_balance = 0;
+    veh.updatedAt = new Date().toISOString();
+    return amount;
+  }
+
+  getVehicleActiveTrip(vehicle) {
+    const n = normText(vehicle);
+    const open = (this.data.trips || []).filter(t => normText(t.vehicle) === n && !t.unloading_date);
+    const sorted = this._sortTrips(open);
+    return sorted[sorted.length - 1] || null;
+  }
+
+  getDriverActiveTrip(driver) {
+    const n = normText(driver);
+    const open = (this.data.trips || []).filter(t => normText(t.driver) === n && !t.unloading_date);
+    const sorted = this._sortTrips(open);
+    return sorted[sorted.length - 1] || null;
+  }
+
+  getTripAdvances(tripId) {
+    const n = normText(tripId);
+    return (this.data.payments || []).filter(p => p.payment_type === 'Advance' && normText(p.trip_id) === n);
+  }
+
+  getTripSettlementPayments(tripId) {
+    const n = normText(tripId);
+    return (this.data.payments || []).filter(p => p.payment_type === 'Settlement' && normText(p.trip_id) === n);
+  }
+
+  getTripExpenseLines(trip) {
+    return DRIVER_EXPENSE_FIELDS
+      .map(f => ({ ...f, amount: round2(trip?.[f.key]) }))
+      .filter(f => f.amount > 0);
+  }
+
+  // Full advance settlement for a trip. `overrides` lets a form preview unsaved values.
+  getTripSettlement(tripId, overrides = null) {
+    const base = this._findTrip(tripId);
+    if (!base && !overrides) return null;
+    const trip = { ...base, ...overrides };
+
+    const voucherLine = p => ({
+      id: p.voucher_no || p.id,
+      date: p.payment_date || p.date || dateOf(p.createdAt),
+      paid_to: p.party_name,
+      category: p.party_category,
+      method: p.payment_method,
+      bank: p.bank_account || p.source_name || '',
+      amount: round2(p.amount),
+      description: p.description || ''
+    });
+
+    const previousBalance = round2(trip.previous_advance_balance);
+    const advances = this.getTripAdvances(trip.id).map(voucherLine);
+    const advanceTotal = sumBy(advances, a => a.amount);
+    const totalAdvance = round2(previousBalance + advanceTotal);
+    const expenses = this.getTripExpenseLines(trip);
+    const expenseTotal = sumBy(expenses, e => e.amount);
+    const balance = round2(totalAdvance - expenseTotal);
+    const finalDue = balance < 0 ? -balance : 0;
+    const carryForward = balance > 0 ? balance : 0;
+    const settlements = this.getTripSettlementPayments(trip.id).map(voucherLine);
+    const settledAmount = sumBy(settlements, s => s.amount);
+    const delivered = Boolean(trip.unloading_date);
+    const outstandingDue = delivered ? Math.max(0, round2(finalDue - settledAmount)) : 0;
+
+    let status = 'Trip in progress';
+    if (delivered) {
+      if (finalDue > 0) status = outstandingDue > 0 ? 'Final due payable' : 'Final due settled';
+      else if (carryForward > 0) status = 'Surplus carried forward';
+      else status = 'Settled (nil balance)';
+    }
+
+    return {
+      trip, previousBalance, advances, advanceTotal, totalAdvance, expenses, expenseTotal,
+      balance, finalDue, carryForward, settlements, settledAmount, outstandingDue, delivered, status
+    };
+  }
+
+  // Delivered trips whose final due is not fully paid yet
+  getTripsWithOutstandingDue({ vehicle = '', driver = '' } = {}) {
+    return this._sortTrips((this.data.trips || []).filter(t =>
+      t.unloading_date &&
+      (!vehicle || normText(t.vehicle) === normText(vehicle)) &&
+      (!driver || normText(t.driver) === normText(driver))
+    ))
+      .map(t => ({ trip: t, settlement: this.getTripSettlement(t.id) }))
+      .filter(x => x.settlement.outstandingDue > 0);
+  }
+
+  // Advance ledger: one row per trip with carry-forward, advances, expenses and result
+  getAdvanceLedger({ vehicle = '', driver = '', tripId = '', fromDate = '', toDate = '', status = '' } = {}) {
+    const trips = this._sortTrips((this.data.trips || []).filter(t =>
+      (!vehicle || normText(t.vehicle) === normText(vehicle)) &&
+      (!driver || normText(t.driver) === normText(driver)) &&
+      (!tripId || normText(t.id) === normText(tripId)) &&
+      (!fromDate || (t.loading_date || '') >= fromDate) &&
+      (!toDate || (t.loading_date || '') <= toDate)
+    ));
+
+    const rows = trips.map(t => this.getTripSettlement(t.id)).filter(s => {
+      if (status === 'open') return !s.delivered;
+      if (status === 'due') return s.outstandingDue > 0;
+      if (status === 'carry') return s.delivered && s.carryForward > 0;
+      if (status === 'settled') return s.delivered && s.outstandingDue === 0;
+      return true;
+    });
+
+    return {
+      rows,
+      totals: {
+        previous: sumBy(rows, r => r.previousBalance),
+        advances: sumBy(rows, r => r.advanceTotal),
+        expenses: sumBy(rows, r => r.expenseTotal),
+        finalDue: sumBy(rows, r => r.finalDue),
+        settled: sumBy(rows, r => r.settledAmount),
+        outstanding: sumBy(rows, r => r.outstandingDue),
+        carryForward: sumBy(rows, r => (r.delivered ? r.carryForward : 0))
+      },
+      currentVehicleBalance: vehicle ? this.getVehicleAdvanceBalance(vehicle) : null
+    };
+  }
+
+  // ── Mobil / engine oil cost linked to a trip (from Engine Oil Usage entries) ──
+  getOilAverageRate(oilName) {
+    const n = normText(oilName);
+    const purchases = (this.data.engine_oil_purchase || []).filter(p => normText(p.oil_name) === n);
+    const qty = sumBy(purchases, p => p.quantity);
+    const amount = sumBy(purchases, p => p.amount || p.total_amount);
+    return qty > 0 ? amount / qty : 0;
+  }
+
+  getTripMobilOilExpense(tripId) {
+    const n = normText(tripId);
+    const usages = n ? (this.data.engine_oil_usage || []).filter(u => normText(u.trip_id) === n) : [];
+    const lines = usages.map(u => {
+      const qty = toNum(u.quantity_used || u.quantity);
+      const rate = this.getOilAverageRate(u.oil_name);
+      return { id: u.id, date: u.date, oil: u.oil_name, qty, rate: round2(rate), amount: Math.round(qty * rate) };
+    });
+    return { count: lines.length, liters: sumBy(lines, l => l.qty), amount: sumBy(lines, l => l.amount), lines };
+  }
+
+  // Short, readable description for any money movement
+  buildNarration(type, c = {}) {
+    const clean = (arr) => arr.filter(v => v !== undefined && v !== null && String(v).trim() !== '' && v !== '-').join(' · ');
+    const t = c.trip;
+    const driver = t?.driver && t.driver !== '-' ? `Driver: ${t.driver}` : '';
+    const via = c.bank ? `via ${c.bank}` : '';
+    const ref = c.instrument ? `Ref ${c.instrument}` : '';
+    switch (type) {
+      case 'advance':
+        return clean([`Trip advance for ${t?.id || ''}`, t?.vehicle, driver, this._tripRoute(t), via, ref]);
+      case 'settlement':
+        return clean([`Final due settlement for ${t?.id || ''}`, t?.vehicle, driver, via, ref]);
+      case 'receipt':
+        return clean([`Receipt from ${c.party}`, c.bank ? `into ${c.bank}` : '', ref]);
+      default:
+        return clean([`Payment to ${c.party}`, CATEGORY_NARRATION[c.category] || c.category, via, ref]);
+    }
   }
 
   // Double-Entry Cash Account Ledger Generator (Bank-like system for Cash)
@@ -1166,599 +1346,266 @@ class DatabaseService {
     };
   }
 
-  // Detailed Trip Expense & Fuel Settlement Engine (Urdu 1671 JW Excel Sheet Structure)
-  getDetailedTripSheet(vehicleInput = '', tripInput = '') {
-    const trips = this.getTable('trips');
-    const cashPayments = this.getTable('cash_payments');
-    const fuelEntries = this.getTable('fuel_entries');
-    const maintenance = this.getTable('maintenance');
-
-    const vehicleFilter = String(vehicleInput || '').trim().toLowerCase();
-    const tripFilter = String(tripInput || '').trim().toLowerCase();
-
-    // Find requested trip
-    let trip = null;
-
-    if (tripFilter) {
-      // 1. Specific Trip Filter matched by ID, Voucher, or Trip Number
-      trip = trips.find(t => 
-        String(t.id || t.trip_id || t.voucher_no || '').toLowerCase() === tripFilter ||
-        String(t.id || t.trip_id || '').toLowerCase().includes(tripFilter)
-      );
-    }
-
-    if (!trip && vehicleFilter) {
-      // 2. Filter latest trip matching selected vehicle
-      const vehicleTrips = trips.filter(t => 
-        String(t.vehicle || t.vehicle_no || '').toLowerCase().includes(vehicleFilter)
-      );
-      if (vehicleTrips.length > 0) {
-        trip = vehicleTrips[vehicleTrips.length - 1]; // Latest trip for this vehicle
-      }
-    }
-
-    // Default fallback to latest trip overall if no specific match found
-    if (!trip && trips.length > 0) {
-      trip = trips[trips.length - 1];
-    }
-
+  // Detailed Trip Sheet: one trip with loading, freight, diesel, expenses, advances and settlement
+  getDetailedTripSheet({ vehicle = '', driver = '', tripId = '', fromDate = '', toDate = '' } = {}) {
+    let trip = tripId ? this._findTrip(tripId) : null;
     if (!trip) {
-      return null;
+      const pool = this._sortTrips((this.data.trips || []).filter(t =>
+        (!vehicle || normText(t.vehicle) === normText(vehicle)) &&
+        (!driver || normText(t.driver) === normText(driver)) &&
+        (!fromDate || (t.loading_date || '') >= fromDate) &&
+        (!toDate || (t.loading_date || '') <= toDate)
+      ));
+      trip = pool[pool.length - 1] || null;
     }
+    if (!trip) return null;
 
-    const currentTripId = trip.id || trip.trip_id;
-    const vehicleNo = trip.vehicle || trip.vehicle_no || (vehicleInput || 'Vehicle N/A');
-    const driverName = trip.driver || trip.driver_name || 'Driver N/A';
+    const fuel = this.getTripFuelSummary(trip.id);
+    const pumps = [...new Set((this.data.fuel_entries || [])
+      .filter(f => normText(f.trip_id) === normText(trip.id) && f.fuel_pump)
+      .map(f => f.fuel_pump))];
+    const hasStoredDiesel = trip.diesel_expense !== undefined && trip.diesel_expense !== '' && trip.diesel_expense !== null;
+    const dieselExpense = hasStoredDiesel ? round2(trip.diesel_expense) : round2(fuel.netFuelExpense);
 
-    // 1. Diesel Calculations
-    let openingFuelQty = parseFloat(trip.opening_fuel_liters || trip.opening_fuel_ltr || trip.previous_fuel) || 0;
-    let openingFuelCost = parseFloat(trip.opening_fuel_cost) || (openingFuelQty * (parseFloat(trip.fuel_rate) || 0));
+    const mobil = this.getTripMobilOilExpense(trip.id);
+    const mobilExpense = mobil.count > 0 ? mobil.amount : round2(trip.mobil_oil_expense);
 
-    if (openingFuelQty === 0 && vehicleNo) {
-      const vehFuel = this.getVehicleCurrentFuel(vehicleNo);
-      openingFuelQty = vehFuel.liters;
-      openingFuelCost = vehFuel.cost;
-    }
-
-    // Fuel entries specifically purchased during this trip (excluding pre-existing opening fuel entries)
-    const tripFuel = fuelEntries.filter(f => 
-      f && f.trip_id && String(f.trip_id).trim() === String(currentTripId).trim() &&
-      !f.is_opening_fuel &&
-      !(openingFuelQty > 0 && parseFloat(f.liters || f.qty) === openingFuelQty)
-    );
-
-    let cashFuelQty = 0;
-    let cashFuelAmt = 0;
-    let creditFuelQty = 0;
-    let creditFuelAmt = 0;
-    let fuelPumpsUsed = [];
-
-    tripFuel.forEach(f => {
-      const qty = parseFloat(f.qty || f.liters || f.fuel_qty) || 0;
-      const amt = parseFloat(f.amount || f.total_amount) || 0;
-      const pump = f.fuel_pump || f.pump_name || f.vendor || '';
-      if (pump && !fuelPumpsUsed.includes(pump)) {
-        fuelPumpsUsed.push(pump);
-      }
-      if (f.payment_method === 'Cash' || f.payment_type === 'Cash') {
-        cashFuelQty += qty;
-        cashFuelAmt += amt;
-      } else {
-        creditFuelQty += qty;
-        creditFuelAmt += amt;
-      }
-    });
-
-    const totalFuelQty = openingFuelQty + cashFuelQty + creditFuelQty;
-    const totalFuelAmt = openingFuelCost + cashFuelAmt + creditFuelAmt;
-
-    const remainingFuelQty = parseFloat(trip.remaining_fuel_liters) || 0;
-    const avgRate = totalFuelQty > 0 ? (totalFuelAmt / totalFuelQty) : 0;
-    const remainingFuelAmt = parseFloat(trip.remaining_fuel_cost) || (remainingFuelQty * avgRate);
-
-    const consumedFuelQty = Math.max(0, totalFuelQty - remainingFuelQty);
-    const consumedFuelAmt = Math.max(0, totalFuelAmt - remainingFuelAmt);
-
-    // 2. Travel & Route Metrics
-    const routeName = trip.route || (trip.source && trip.destination ? `${trip.source} to ${trip.destination}` : 'N/A');
-    const totalKm = parseFloat(trip.total_km || trip.km_reading || trip.distance) || 0;
-    const totalDays = parseFloat(trip.total_days || trip.duration) || 0;
-    const startDate = trip.loading_date || trip.date || '-';
-    const endDate = trip.unloading_date || trip.delivery_date || '-';
-    const fuelAverageKml = consumedFuelQty > 0 ? (totalKm / consumedFuelQty).toFixed(2) : '0.00';
-
-    // 3. Driver Advances
-    const advanceAmount = parseFloat(trip.advance_paid || trip.driver_advance || trip.advance_cash || trip.advance) || 0;
-    const advanceBreakdown = Array.isArray(trip.advance_breakdown) ? trip.advance_breakdown : (advanceAmount > 0 ? [{ source: 'Advance Cash', amount: advanceAmount }] : []);
-
-    // 4. Trip Expenses & Journal
-    // Find cash expenses linked to vehicle or trip
-    const tripCashPayments = cashPayments.filter(cp => 
-      (cp.trip_id && String(cp.trip_id) === String(currentTripId)) ||
-      (cp.vehicle === vehicleNo || cp.driver === driverName)
-    );
-
-    // Dynamic expense mapping from trip fields & cash payments
-    let foodExpense = parseFloat(trip.food_expense || trip.roti_expense) || 0;
-    let tollTax = parseFloat(trip.toll_tax || trip.toll) || 0;
-    let otherExpenses = parseFloat(trip.other_expenses || trip.challan || trip.misc_expense || trip.fine_amount) || 0;
-    let trafficFine = parseFloat(trip.traffic_fine || trip.fine) || 0;
-    let workshopRepair = parseFloat(trip.workshop_repair || trip.repair_cost) || 0;
-    let loadingCharge = parseFloat(trip.loading_charge || trip.loading_cost) || 0;
-    let kandaScale = parseFloat(trip.kanda_scale || trip.weighbridge_cost) || 0;
-    let munshiana = parseFloat(trip.munshiana) || 0;
-
-    // Daily Journal / Sub Expenses directly calculated from trip or cash payments
-    const journalExpenses = [
-      { sr: 1, title: 'Tyre Expense', amount: parseFloat(trip.tyre_expense) || 0 },
-      { sr: 2, title: 'Traffic Police', amount: parseFloat(trip.traffic_police) || 0 },
-      { sr: 3, title: 'Custom Police', amount: parseFloat(trip.custom_police) || 0 },
-      { sr: 4, title: 'Excise Police', amount: parseFloat(trip.excise_police) || 0 },
-      { sr: 5, title: 'Sindh Police', amount: parseFloat(trip.sindh_police) || 0 },
-      { sr: 6, title: 'Service & Grease', amount: parseFloat(trip.service_grease) || 0 },
-      { sr: 7, title: 'Washing & Net Filter', amount: parseFloat(trip.washing_filter) || 0 },
-      { sr: 8, title: 'Secretary Challan', amount: parseFloat(trip.secretary_challan) || 0 },
-      { sr: 9, title: 'Security Guard / Chowkidar', amount: parseFloat(trip.security_guard) || 0 },
-      { sr: 10, title: 'Weighbridge Deduction', amount: parseFloat(trip.weighbridge_deduction) || 0 },
-      { sr: 11, title: 'Driver Salary & Wages', amount: parseFloat(trip.driver_salary || trip.salary) || 0 },
-      { sr: 12, title: 'Other Minor Expenses', amount: parseFloat(trip.minor_expenses) || 0 },
-      { sr: 13, title: 'Scale Vehicle Fee', amount: parseFloat(trip.scale_fee) || 0 },
-      { sr: 14, title: 'Rickshaw / Local Rent', amount: parseFloat(trip.rickshaw_rent) || 0 }
-    ];
-
-    let totalSubExpenses = journalExpenses.reduce((sum, item) => sum + (item.amount || 0), 0);
-
-    // Calculate Operating Expenses (Excluding duplicate otherExpenses and excluding Diesel)
-    let totalExpensesExclDiesel = foodExpense + tollTax + trafficFine + workshopRepair + loadingCharge + kandaScale + munshiana + totalSubExpenses;
-
-    // Whole Trip Total Cost = (Operating Expenses + Daily Sub-Expenses) + Consumed Diesel Cost
-    const totalTripCostWithDiesel = totalExpensesExclDiesel + consumedFuelAmt;
-
-    // 5. Trip Net Settlement
-    const totalTripExpenseForDriver = parseFloat(trip.total_driver_expense || trip.driver_expenses) || totalExpensesExclDiesel;
-    const currentTripBalance = advanceAmount - totalTripExpenseForDriver;
-    const previousBalance = parseFloat(trip.previous_balance) || 0;
-    const finalVehicleBalance = currentTripBalance + previousBalance;
-
-    // 6. Loading & Weight Details
-    const loadingPlant = trip.source || 'N/A';
-    const unloadingPlant = trip.destination || 'N/A';
-    const loadedWeight = parseFloat(trip.load_weight || trip.loaded_weight_kg || trip.loading_weight) || 0;
-    const unloadedWeight = parseFloat(trip.unload_weight || trip.unloaded_weight_kg || trip.unloading_weight) || 0;
-    const weightDifference = trip.difference !== undefined ? trip.difference : (loadedWeight > 0 && unloadedWeight > 0 ? parseFloat((unloadedWeight - loadedWeight).toFixed(2)) : 0);
-    const loadPressure = parseFloat(trip.load_pressure || trip.load_pressure_psi) || 0;
-    const unloadPressure = parseFloat(trip.unload_pressure || trip.unload_pressure_psi) || 0;
+    const settlement = this.getTripSettlement(trip.id);
+    const distance = toNum(trip.distance);
+    const netIncome = toNum(trip.net_income) || toNum(trip.total_cost);
+    const totalTripCost = round2(settlement.expenseTotal + dieselExpense + mobilExpense);
+    const clean = (v) => (v && v !== '-' && v !== 'Pending' ? v : '—');
 
     return {
-      tripId: currentTripId,
-      vehicleNo,
-      driverName,
-      dates: { startDate, endDate, totalDays },
-      route: { name: routeName, distanceKm: totalKm, averageKml: fuelAverageKml },
+      trip,
+      tripId: trip.id,
+      vehicleNo: trip.vehicle || '—',
+      driverName: clean(trip.driver),
+      supplier: clean(trip.supplier || trip.vendor),
+      customer: clean(trip.customer),
+      source: clean(trip.source),
+      destination: clean(trip.destination),
+      plant: clean(trip.plant),
+      loadDate: trip.loading_date || '',
+      unloadDate: trip.unloading_date || '',
+      durationDays: daysBetween(trip.loading_date, trip.unloading_date),
+      status: trip.unloading_date ? (trip.status || 'Delivered') : 'In Transit',
+      weights: {
+        load: toNum(trip.load_weight), unload: toNum(trip.unload_weight), diff: toNum(trip.difference),
+        loadPsi: toNum(trip.load_pressure), unloadPsi: toNum(trip.unload_pressure), distance
+      },
+      freight: {
+        type: trip.freight_type || 'Per Ton',
+        rate: trip.freight_type === 'Per KM' ? toNum(trip.freight_km_rate) : toNum(trip.freight_ton_rate),
+        gross: toNum(trip.amount),
+        shortSurplusType: trip.short_surplus_type || '',
+        shortSurplusAmount: toNum(trip.short_surplus_amount),
+        netIncome
+      },
       diesel: {
-        openingQty: openingFuelQty, openingAmt: openingFuelCost,
-        cashQty: cashFuelQty, cashAmt: cashFuelAmt,
-        creditQty: creditFuelQty, creditAmt: creditFuelAmt,
-        totalQty: totalFuelQty, totalAmt: totalFuelAmt,
-        consumedQty: consumedFuelQty, consumedAmt: consumedFuelAmt,
-        remainingQty: remainingFuelQty, remainingAmt: remainingFuelAmt,
-        fuelPumps: fuelPumpsUsed.length > 0 ? fuelPumpsUsed.join(', ') : 'N/A'
+        ...fuel,
+        expense: dieselExpense,
+        pumps: pumps.join(', ') || '—',
+        avgKmPerLiter: fuel.consumedLiters > 0 && distance > 0 ? distance / fuel.consumedLiters : 0
       },
-      summary: {
-        advanceReceived: advanceAmount,
-        totalExpenses: totalTripExpenseForDriver,
-        currentTripBalance: currentTripBalance,
-        previousBalance: previousBalance,
-        finalBalanceDue: finalVehicleBalance
-      },
-      loading: {
-        loadingPlant, unloadingPlant,
-        loadedWeight, unloadedWeight,
-        weightDifference, loadPressure, unloadPressure
-      },
-      advancesList: advanceBreakdown,
-      expensesBreakdown: {
-        foodExpense, tollTax, trafficFine,
-        cashFuelAmt, workshopRepair, loadingCharge, kandaScale, munshiana,
-        totalSubExpenses, totalExpensesExclDiesel, totalTripCostWithDiesel
-      },
-      journalExpenses
+      mobilOil: { amount: mobilExpense, liters: mobil.liters, fromUsage: mobil.count > 0 },
+      settlement,
+      totals: {
+        roadExpenses: settlement.expenseTotal,
+        diesel: dieselExpense,
+        mobilOil: mobilExpense,
+        totalTripCost,
+        netIncome,
+        tripMargin: round2(netIncome - totalTripCost)
+      }
     };
   }
 
-  // Double-Entry Bank & Cash Ledger Generator
-  getBankLedger(accountInput, fromDate = '', toDate = '') {
-    const bankAccounts = this.getTable('bank_accounts');
-    let targetAccount = null;
+  // Shared ledger builder: opening balance from rows before fromDate, then running balance
+  _buildLedger(rawRows, sign, fromDate, toDate, meta = {}) {
+    let opening = toNum(meta.openingBalance);
+    const period = [];
+    [...rawRows]
+      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+      .forEach(r => {
+        if (fromDate && (r.date || '') < fromDate) opening += sign(r);
+        else if (!toDate || (r.date || '') <= toDate) period.push(r);
+      });
 
-    if (typeof accountInput === 'object') {
-      targetAccount = accountInput;
-    } else if (accountInput) {
-      const q = String(accountInput).trim().toLowerCase();
-      targetAccount = bankAccounts.find(b => 
-        String(b.id || '').toLowerCase() === q ||
-        String(b.bank_name || '').toLowerCase() === q ||
-        String(b.account_title || '').toLowerCase() === q ||
-        String(b.account_number || '').toLowerCase() === q ||
-        String(b.bank_name || '').toLowerCase().includes(q)
-      );
-    }
+    let balance = opening;
+    const rows = [{
+      date: fromDate || period[0]?.date || todayISO(), ref: '-', description: 'Opening Balance',
+      dr: 0, cr: 0, balance: round2(opening), isOpening: true
+    }];
+    period.forEach(r => {
+      balance += sign(r);
+      rows.push({ ...r, balance: round2(balance) });
+    });
 
-    let initialOpeningBalance = targetAccount ? (parseFloat(targetAccount.opening_balance) || 0) : 0;
-    const accountName = targetAccount ? (targetAccount.bank_name || targetAccount.account_title) : String(accountInput || '');
-
-    const isMatch = (val) => {
-      if (!val) return false;
-      const sVal = String(val).trim().toLowerCase();
-      if (!targetAccount && !accountInput) return true;
-      const candidates = [
-        targetAccount?.id, targetAccount?.bank_name, targetAccount?.account_title, targetAccount?.account_number, accountName, accountInput
-      ].filter(Boolean).map(s => String(s).trim().toLowerCase());
-
-      return candidates.some(c => sVal === c || sVal.includes(c) || c.includes(sVal));
+    return {
+      ...meta,
+      openingBalance: round2(opening),
+      closingBalance: round2(balance),
+      totalDr: sumBy(period, r => r.dr),
+      totalCr: sumBy(period, r => r.cr),
+      rows
     };
+  }
 
-    const rawTxns = [];
+  // Bank ledger - bank_transactions is the single source of every bank movement
+  getBankLedger(accountInput = '', fromDate = '', toDate = '', { txnType = '' } = {}) {
+    const banks = this.data.bank_accounts || [];
+    let target = null;
+    if (accountInput && typeof accountInput === 'object') target = accountInput;
+    else if (accountInput) {
+      const q = normText(accountInput);
+      target = banks.find(b => [b.id, b.bank_name, b.account_title, b.account_number].some(v => normText(v) === q)) || null;
+    }
+    const accounts = target ? [target] : banks;
+    const openingBalance = sumBy(accounts, a => a.opening_balance);
 
-    // Bank Transactions table
-    this.getTable('bank_transactions').forEach(bt => {
-      if (isMatch(bt.account) || isMatch(bt.bank_name) || isMatch(bt.account_number)) {
-        const type = bt.type || bt.transaction_type || 'Deposit';
-        const isDebit = type === 'Deposit' || type === 'Transfer In';
-        const amt = parseFloat(bt.amount) || 0;
-        rawTxns.push({
-          date: bt.date || bt.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          ref: bt.reference_no || bt.id || 'BT-TXN',
+    const rows = (this.data.bank_transactions || [])
+      .filter(bt => !target || normText(bt.account) === normText(target.bank_name) || normText(bt.bank_id) === normText(target.id))
+      .filter(bt => !txnType || (bt.transaction_type || bt.type) === txnType)
+      .map(bt => {
+        const type = bt.transaction_type || bt.type || 'Deposit';
+        const inflow = type === 'Deposit' || type === 'Transfer In';
+        const amt = round2(bt.amount);
+        return {
+          date: bt.date || dateOf(bt.createdAt),
+          ref: bt.reference_no || bt.reference_id || bt.id,
+          account: bt.account,
+          party: bt.party_name || bt.paid_to || '',
+          type,
           description: bt.description || bt.remarks || `Bank ${type}`,
-          dr: isDebit ? amt : 0,
-          cr: isDebit ? 0 : amt
-        });
-      }
-    });
+          dr: inflow ? amt : 0,
+          cr: inflow ? 0 : amt
+        };
+      });
 
-    // Payment Vouchers Issued (Payments out -> Credit / Cr)
-    this.getTable('payments').forEach(p => {
-      if (isMatch(p.bank_account) || isMatch(p.bank) || isMatch(p.account) || p.payment_mode === 'Bank' || !accountInput) {
-        const amt = parseFloat(p.amount) || 0;
-        rawTxns.push({
-          date: p.payment_date || p.date || p.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          ref: p.id || p.voucher_no || 'PAY-VCH',
-          description: `Payment to ${p.party_name || p.paid_to || 'Party'} (${p.category || 'Expense'}) - ${p.remarks || ''}`,
-          dr: 0,
-          cr: amt
-        });
-      }
+    return this._buildLedger(rows, r => r.dr - r.cr, fromDate, toDate, {
+      accountName: target ? `${target.bank_name}${target.account_number ? ` (${target.account_number})` : ''}` : 'All Bank Accounts',
+      openingBalance
     });
+  }
 
-    // Cash Payments / Vouchers
-    if (!accountInput || accountName.toLowerCase().includes('cash')) {
-      this.getTable('cash_payments').forEach(cp => {
-        const amt = parseFloat(cp.amount) || 0;
-        rawTxns.push({
-          date: cp.date || cp.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          ref: cp.id || 'CASH-VCH',
-          description: `Cash Payment to ${cp.paid_to || cp.party_name || 'Party'} (${cp.head || cp.category || 'Expense'})`,
-          dr: 0,
-          cr: amt
-        });
+  // Party ledger. Payables (vendors, workshops, pumps, vehicles): bills Cr, payments Dr.
+  // Receivables (customers): freight billed Dr, receipts Cr.
+  getPartyLedger(partyCategory, partyInput = '', fromDate = '', toDate = '', opts = {}) {
+    const isReceivable = partyCategory === 'Customers';
+    const rows = this.getPartyTransactions(partyCategory, partyInput, opts).map(t => ({
+      date: t.date,
+      ref: t.ref,
+      party: t.party,
+      trip_id: t.trip_id,
+      vehicle: t.vehicle,
+      description: t.description,
+      dr: (isReceivable ? t.kind === 'charge' : t.kind === 'payment') ? t.amount : 0,
+      cr: (isReceivable ? t.kind === 'payment' : t.kind === 'charge') ? t.amount : 0
+    }));
+    const partyName = partyInput && typeof partyInput === 'object'
+      ? (partyInput.name || partyInput.business_name || partyInput.number)
+      : (partyInput || `All ${partyCategory}`);
+
+    return this._buildLedger(rows, r => (isReceivable ? r.dr - r.cr : r.cr - r.dr), fromDate, toDate, {
+      partyName,
+      partyCategory,
+      balanceType: isReceivable ? 'Receivable' : 'Payable'
+    });
+  }
+
+  // Universal ledger combining bank movements and every party ledger
+  getUniversalLedger(fromDate = '', toDate = '', filterCategory = '', filterParty = '') {
+    const raw = [];
+    if (!filterCategory || filterCategory === 'Bank') {
+      this.getBankLedger().rows.filter(r => !r.isOpening).forEach(r => {
+        if (filterParty && normText(r.account) !== normText(filterParty) && normText(r.party) !== normText(filterParty)) return;
+        raw.push({ ...r, category: 'Bank', party: r.account || 'Bank' });
       });
     }
-
-    // Customer Payments Received (Deposits -> Debit / Dr)
-    this.getTable('payments_received').forEach(pr => {
-      if (isMatch(pr.bank) || isMatch(pr.account) || isMatch(pr.bank_account) || !accountInput) {
-        const amt = parseFloat(pr.amount) || 0;
-        rawTxns.push({
-          date: pr.date || pr.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          ref: pr.id || 'REC-VCH',
-          description: `Payment Received from ${pr.customer || pr.party_name || 'Customer'} - ${pr.remarks || ''}`,
-          dr: amt,
-          cr: 0
-        });
-      }
-    });
-
-    rawTxns.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-
-    let openingBalance = initialOpeningBalance;
-    const periodTxns = [];
-
-    rawTxns.forEach(t => {
-      if (fromDate && t.date < fromDate) {
-        openingBalance += (t.dr - t.cr);
-      } else if (!toDate || t.date <= toDate) {
-        periodTxns.push(t);
-      }
-    });
-
-    let currentBal = openingBalance;
-    const ledgerRows = [
-      {
-        date: fromDate || (periodTxns[0]?.date || new Date().toISOString().split('T')[0]),
-        ref: '-',
-        description: 'Opening Balance',
-        dr: 0,
-        cr: 0,
-        balance: openingBalance,
-        isOpening: true
-      }
-    ];
-
-    periodTxns.forEach(t => {
-      currentBal += (t.dr - t.cr);
-      ledgerRows.push({
-        ...t,
-        balance: currentBal
-      });
-    });
-
-    return {
-      accountName: accountName || 'All Bank Accounts',
-      openingBalance: openingBalance,
-      closingBalance: currentBal,
-      totalDr: periodTxns.reduce((s, x) => s + x.dr, 0),
-      totalCr: periodTxns.reduce((s, x) => s + x.cr, 0),
-      rows: ledgerRows
-    };
-  }
-
-  // Double-Entry Party General Ledger Generator (Vendors, Workshops, Fuel Pumps, Transporters, Customers)
-  getPartyLedger(partyCategory, partyInput, fromDate = '', toDate = '') {
-    const summary = this.getPartyPayableSummary(partyCategory, partyInput);
-    const rawTxns = [];
-
-    // Accrued Liabilities -> Credit (Cr)
-    (summary.entries || []).forEach(e => {
-      rawTxns.push({
-        date: e.date,
-        ref: e.id,
-        description: e.description,
-        dr: 0,
-        cr: parseFloat(e.total_amount) || 0
-      });
-    });
-
-    const normInput = typeof partyInput === 'object' ? (partyInput.name || partyInput.business_name) : partyInput;
-    const isMatch = (val) => {
-      if (!val) return false;
-      const sVal = String(val).trim().toLowerCase();
-      const pVal = String(normInput || '').trim().toLowerCase();
-      return sVal === pVal || sVal.includes(pVal) || pVal.includes(sVal);
-    };
-
-    // Payment Vouchers Issued (Settlements -> Debit / Dr)
-    this.getTable('payments').forEach(p => {
-      if (isMatch(p.party_name) || isMatch(p.paid_to) || isMatch(p.party_id)) {
-        const amt = parseFloat(p.amount) || 0;
-        rawTxns.push({
-          date: p.payment_date || p.date || p.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          ref: p.id || 'PAY-VCH',
-          description: `Payment Voucher Issued (${p.payment_mode || 'Bank'} - ${p.bank || ''}) - ${p.remarks || ''}`,
-          dr: amt,
-          cr: 0
-        });
-      }
-    });
-
-    // Cash Payments (Settlements -> Debit / Dr)
-    this.getTable('cash_payments').forEach(c => {
-      if (isMatch(c.paid_to) || isMatch(c.party_name)) {
-        const amt = parseFloat(c.amount) || 0;
-        rawTxns.push({
-          date: c.date || c.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0],
-          ref: c.id || 'CSH-VCH',
-          description: `Cash Payment Issued (${c.head || 'Expense'}) - ${c.remarks || ''}`,
-          dr: amt,
-          cr: 0
-        });
-      }
-    });
-
-    rawTxns.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-
-    let openingBalance = 0;
-    const periodTxns = [];
-
-    rawTxns.forEach(t => {
-      if (fromDate && t.date < fromDate) {
-        openingBalance += (t.cr - t.dr);
-      } else if (!toDate || t.date <= toDate) {
-        periodTxns.push(t);
-      }
-    });
-
-    let currentBal = openingBalance;
-    const ledgerRows = [
-      {
-        date: fromDate || (periodTxns[0]?.date || new Date().toISOString().split('T')[0]),
-        ref: '-',
-        description: 'Opening Balance',
-        dr: 0,
-        cr: 0,
-        balance: openingBalance,
-        isOpening: true
-      }
-    ];
-
-    periodTxns.forEach(t => {
-      currentBal += (t.cr - t.dr);
-      ledgerRows.push({
-        ...t,
-        balance: currentBal
-      });
-    });
-
-    return {
-      partyName: normInput || 'All Parties',
-      partyCategory: partyCategory,
-      openingBalance: openingBalance,
-      closingBalance: currentBal,
-      totalDr: periodTxns.reduce((s, x) => s + x.dr, 0),
-      totalCr: periodTxns.reduce((s, x) => s + x.cr, 0),
-      rows: ledgerRows
-    };
-  }
-
-  // Universal General Ledger combining all bank, cash, vendor, workshop, fuel pump, transporter & customer ledgers
-  getUniversalLedger(fromDate = '', toDate = '', filterCategory = '', filterParty = '') {
-    const rawTxns = [];
-
-    // Bank & Cash Ledgers
-    const bankAccounts = this.getTable('bank_accounts');
-    bankAccounts.forEach(acc => {
-      if (filterCategory && filterCategory !== 'Bank' && filterCategory !== 'Cash') return;
-      const bLedger = this.getBankLedger(acc, fromDate, toDate);
-      (bLedger.rows || []).forEach(r => {
-        if (!r.isOpening) {
-          rawTxns.push({
-            date: r.date,
-            ref: r.ref,
-            category: acc.bank_name?.toLowerCase().includes('cash') ? 'Cash' : 'Bank',
-            party: acc.bank_name || acc.account_title,
-            description: r.description,
-            dr: r.dr,
-            cr: r.cr
-          });
-        }
-      });
-    });
-
-    // Party Ledgers
-    const categories = ['Vendors', 'Workshops', 'Fuel Pumps', 'Transporters', 'Customers'];
-    categories.forEach(cat => {
+    ['Vendors', 'Workshops', 'Fuel Pumps', 'Vehicles', 'Customers'].forEach(cat => {
       if (filterCategory && filterCategory !== cat) return;
-      const pLedger = this.getPartyLedger(cat, filterParty, fromDate, toDate);
-      (pLedger.rows || []).forEach(r => {
-        if (!r.isOpening) {
-          rawTxns.push({
-            date: r.date,
-            ref: r.ref,
-            category: cat,
-            party: pLedger.partyName || cat,
-            description: r.description,
-            dr: r.dr,
-            cr: r.cr
-          });
-        }
-      });
+      this.getPartyLedger(cat, filterParty).rows.filter(r => !r.isOpening).forEach(r => raw.push({ ...r, category: cat }));
     });
 
-    // Sort chronologically
-    rawTxns.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-
-    let currentBal = 0;
-    const ledgerRows = [];
-
-    rawTxns.forEach(t => {
-      currentBal += (t.dr - t.cr);
-      ledgerRows.push({
-        ...t,
-        balance: currentBal
-      });
-    });
-
-    return {
-      title: 'Universal General Ledger',
-      totalDr: ledgerRows.reduce((s, x) => s + x.dr, 0),
-      totalCr: ledgerRows.reduce((s, x) => s + x.cr, 0),
-      rows: ledgerRows
-    };
+    const ledger = this._buildLedger(raw, r => r.dr - r.cr, fromDate, toDate, { title: 'Universal General Ledger' });
+    ledger.rows = ledger.rows.filter(r => !r.isOpening || r.balance !== 0);
+    return ledger;
   }
 
   // Daily Activity Executive Report Data Aggregator
-  getDailyActivityReport(reportDate = new Date().toISOString().split('T')[0]) {
-    const vehicles = this.getTable('vehicles');
+  getDailyActivityReport(reportDate = todayISO()) {
     const trips = this.getTable('trips');
-    const fuelEntries = this.getTable('fuel_entries');
     const cashPayments = this.getTable('cash_payments');
-    const maintenance = this.getTable('maintenance');
-    const fuelPumps = this.getTable('fuel_pumps');
-    const workshops = this.getTable('workshops');
-    const oilPurchases = this.getTable('engine_oil_purchase');
-    const oilUsage = this.getTable('engine_oil_usage');
-    const oilDef = this.getTable('engine_oil_defination');
 
-    // 1. Vehicle Locations Snapshot
-    const vehicleLocations = vehicles.map(v => {
-      // Find latest trip active or delivered
-      const activeTrip = trips.find(t => t.vehicle === v.number && (t.status === 'Dispatched' || t.status === 'In Transit'));
+    // 1. Vehicle locations: loaded (open trip) or last delivery point
+    const vehicleLocations = this.getTable('vehicles').map(v => {
+      const active = this.getVehicleActiveTrip(v.number);
+      const done = this._sortTrips(trips.filter(t => normText(t.vehicle) === normText(v.number) && t.unloading_date));
+      const last = done[done.length - 1];
       return {
         number: v.number,
-        location: activeTrip ? (activeTrip.destination || activeTrip.source || 'En Route') : (v.location || 'Yard / Base'),
-        status: activeTrip ? 'Load' : (v.status || 'Empty')
+        location: active ? `${active.source && active.source !== '-' ? active.source : 'Loaded'} → in transit` : (last?.destination || 'Yard / Base'),
+        status: active ? `Loaded (${active.id})` : (v.status || 'Empty')
       };
     });
 
-    // 2. Vehicles Loaded Today & Decanted Today
+    // 2. Loaded / decanted on the report date
     const vehiclesLoadedToday = trips.filter(t => t.loading_date === reportDate).map(t => ({
-      number: t.vehicle,
-      location: t.destination || t.source || '-',
-      psi: t.load_pressure || '-'
+      number: t.vehicle, trip: t.id, location: t.source || '-', psi: t.load_pressure || '-'
     }));
-
     const vehiclesDecantedToday = trips.filter(t => t.unloading_date === reportDate).map(t => ({
-      number: t.vehicle,
-      location: t.destination || '-',
-      psi: t.unload_pressure || '-'
+      number: t.vehicle, trip: t.id, location: t.destination || '-', psi: t.unload_pressure || '-'
     }));
 
-    // 3. Advances From Plants / By Umair
-    const advances = cashPayments.filter(c => c.date === reportDate && (c.head?.toLowerCase().includes('advance') || c.category === 'Advances')).map(c => ({
+    // 3. Trip advances paid on the report date
+    const advances = this.getTable('payments')
+      .filter(p => p.payment_type === 'Advance' && (p.payment_date || p.date) === reportDate)
+      .map(p => {
+        const t = this._findTrip(p.trip_id);
+        return { vehicle: p.vehicle || t?.vehicle || '-', trip: p.trip_id, plant: t?.source || '-', amount: round2(p.amount) };
+      });
+
+    // 4. Cash fueling / other cash expenses
+    const cashFueling = cashPayments.filter(c => c.date === reportDate).map(c => ({
       vehicle: c.vehicle || '-',
-      plant: c.head || 'Plant Advance',
-      amount: parseFloat(c.amount) || 0
+      head: c.category || c.head || c.payment_type || 'Expense',
+      amount: round2(c.amount),
+      paidBy: c.driver || c.paid_to || 'Cash'
     }));
 
-    // 4. Cash Fueling / Other Expenses
-    const cashFueling = cashPayments.filter(c => c.date === reportDate && (c.head?.toLowerCase().includes('fuel') || c.head?.toLowerCase().includes('expense'))).map(c => ({
-      vehicle: c.vehicle || '-',
-      qty: c.liters || '-',
-      amount: parseFloat(c.amount) || 0,
-      paidBy: c.paid_by || c.bank || 'Cash'
-    }));
-
-    // 5. Fuel Pump Credit Ledgers (Saqib Pump / Active Pumps)
-    const pumpSummaries = fuelPumps.slice(0, 3).map((pump, idx) => {
-      const pLedger = this.getPartyLedger('Fuel Pumps', pump.name, '', reportDate);
-      return {
-        pumpName: `${pump.name} ( Pump ${idx + 1} )`,
-        openingCr: pLedger.openingBalance || 0,
-        paymentsThisDate: pLedger.rows.filter(r => r.date === reportDate && r.dr > 0).map(r => ({
-          vehicle: r.ref || r.description?.split(' ')[0] || '-',
-          dr: r.dr
-        })),
-        totalDr: pLedger.totalDr,
-        totalCr: pLedger.totalCr,
-        closingBalance: pLedger.closingBalance
-      };
+    // 5. Fuel pump & workshop balances as of the report date
+    const pumpSummaries = this.getTable('fuel_pumps').map(pump => {
+      const l = this.getPartyLedger('Fuel Pumps', pump.name, reportDate, reportDate);
+      return { pumpName: pump.name, openingCr: l.openingBalance, billedToday: l.totalCr, paidToday: l.totalDr, closingBalance: l.closingBalance };
+    });
+    const workshopSummary = this.getTable('workshops').map(w => {
+      const l = this.getPartyLedger('Workshops', w.name, reportDate, reportDate);
+      return { name: w.name, previousAmount: l.openingBalance, billed: l.totalCr, paid: l.totalDr, remaining: l.closingBalance };
     });
 
-    // 6. Workshop Details
-    const workshopSummary = workshops.map(w => {
-      const wLedger = this.getPartyLedger('Workshops', w.name, '', reportDate);
-      return {
-        name: w.name,
-        previousAmount: wLedger.openingBalance || 0,
-        paid: wLedger.totalDr || 0,
-        remaining: wLedger.closingBalance || 0,
-        paidBy: 'Bank/Cash'
-      };
-    });
-
-    // 7. Payables Amounts Total
+    // 6. Payables & receivables
     const pendingPayables = this.getPendingPayables();
-    const payablesTotal = pendingPayables.reduce((s, x) => s + x.remaining_amount, 0);
+    const payablesTotal = sumBy(pendingPayables, x => x.remaining_amount);
+    const receivablesTotal = sumBy(this.getPendingReceivables(), x => x.remaining_amount);
 
-    // 8. Mobil Oil Details
-    const totalOilPurchased = oilPurchases.reduce((s, x) => s + (parseFloat(x.quantity_liters) || 0), 0);
-    const totalOilUsed = oilUsage.reduce((s, x) => s + (parseFloat(x.quantity_used) || 0), 0);
-    const oilOpeningStock = 258; // Current baseline
-    const oilRemainingStock = oilOpeningStock + totalOilPurchased - totalOilUsed;
+    // 7. Engine oil stock on the report date (current stock rolled back for later movements)
+    const purchases = this.getTable('engine_oil_purchase');
+    const usage = this.getTable('engine_oil_usage');
+    const qtyP = p => p.quantity;
+    const qtyU = u => u.quantity_used || u.quantity;
+    const currentStock = sumBy(this.getTable('engine_oil_defination'), o => o.current_stock);
+    const purchasedAfter = sumBy(purchases.filter(p => (p.date || '') > reportDate), qtyP);
+    const usedAfter = sumBy(usage.filter(u => (u.date || '') > reportDate), qtyU);
+    const purchasedOn = sumBy(purchases.filter(p => p.date === reportDate), qtyP);
+    const usedOn = sumBy(usage.filter(u => u.date === reportDate), qtyU);
+    const closingStock = round2(currentStock - purchasedAfter + usedAfter);
+    const openingStock = round2(closingStock - purchasedOn + usedOn);
 
     return {
-      reportNo: '220',
+      reportNo: `DAR-${reportDate.replace(/-/g, '')}`,
       date: reportDate,
-      time: '7:00 AM',
+      time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
       vehicleLocations,
       vehiclesLoadedToday,
       vehiclesDecantedToday,
@@ -1768,239 +1615,224 @@ class DatabaseService {
       workshopSummary,
       pendingPayables,
       payablesTotal,
+      receivablesTotal,
       oilDetails: {
-        openingStock: oilOpeningStock,
-        purchasedStock: totalOilPurchased,
-        totalStock: oilOpeningStock + totalOilPurchased,
-        remainingStock: oilRemainingStock
+        openingStock,
+        purchasedStock: purchasedOn,
+        usedStock: usedOn,
+        totalStock: round2(openingStock + purchasedOn),
+        remainingStock: closingStock
       }
     };
   }
 
-  // Process Unified Payment Voucher against Party Balance
-  async processPaymentVoucher({
-    payment_source, // 'Bank' or 'Cash'
-    bank_id,
-    cash_id,
-    party_category,
-    party_name,
-    payment_date,
-    amount,
-    payment_method,
-    instrument_no,
-    remarks
+  // Payment Voucher (payable) from a bank account. Types:
+  //  'Payment'    - normal dues to vendors, workshops, fuel pumps, drivers, vehicles, personal
+  //  'Advance'    - advance for a vehicle/driver's running trip (consumed in trip settlement)
+  //  'Settlement' - pays the FINAL DUE of a delivered trip
+  async processPaymentVoucher(voucherData) {
+    return this.transaction(() => this._processPaymentVoucher(voucherData));
+  }
+
+  async _processPaymentVoucher({
+    bank_id, party_category, party_name, payment_date, amount, payment_method,
+    instrument_no, remarks, description, payment_type = 'Payment', trip_id = ''
   }) {
-    const payAmount = parseFloat(amount) || 0;
-    if (payAmount <= 0) {
-      throw new Error("Payment voucher amount must be greater than zero.");
+    const payAmount = round2(amount);
+    if (payAmount <= 0) throw new Error('Payment voucher amount must be greater than zero.');
+    if (!party_name) throw new Error('Please select a valid party / entity to make payment to.');
+    if (!PAYABLE_CATEGORIES.includes(party_category)) throw new Error('Please select a valid payment category.');
+
+    const bankObj = (this.data.bank_accounts || []).find(b => b.id === bank_id || b.bank_name === bank_id);
+    if (!bankObj) throw new Error('Selected bank account was not found.');
+    const available = toNum(bankObj.current_balance);
+    if (available < payAmount) {
+      throw new Error(`Insufficient funds in ${bankObj.bank_name}. Available: PKR ${available.toLocaleString()}, Required: PKR ${payAmount.toLocaleString()}`);
     }
-    if (!party_name) {
-      throw new Error("Please select a valid party / entity to make payment to.");
-    }
 
-    let sourceName = 'Cash Account';
-    let bankObj = null;
+    const date = payment_date || todayISO();
+    let trip = null;
+    let outstandingBefore = 0;
+    let balanceAfter = 0;
 
-    // 1. Source Account Balance Deductions
-    if (payment_source === 'Bank') {
-      const banks = this.getTable('bank_accounts');
-      bankObj = banks.find(b => b.id === bank_id || b.bank_name === bank_id);
-      if (!bankObj) {
-        throw new Error("Selected bank account was not found.");
+    if (payment_type === 'Advance' || payment_type === 'Settlement') {
+      if (!['Vehicles', 'Drivers'].includes(party_category)) throw new Error('Trip advances and settlements are only for vehicles and drivers.');
+      trip = this._findTrip(trip_id);
+      if (!trip) throw new Error('Please select the trip for this voucher.');
+      const assigned = party_category === 'Vehicles' ? trip.vehicle : trip.driver;
+      if (normText(assigned) !== normText(party_name)) throw new Error(`Trip ${trip.id} is not assigned to ${party_name}.`);
+      const s = this.getTripSettlement(trip.id);
+
+      if (payment_type === 'Advance') {
+        if (trip.unloading_date) throw new Error(`Trip ${trip.id} is already delivered. Use Final Due Settlement instead.`);
+        outstandingBefore = s.totalAdvance;              // total advance before this voucher
+        balanceAfter = round2(s.totalAdvance + payAmount); // total advance after this voucher
+      } else {
+        if (payAmount > s.outstandingDue + 0.001) {
+          throw new Error(`Amount is more than the outstanding final due of ${trip.id} (PKR ${s.outstandingDue.toLocaleString()}).`);
+        }
+        outstandingBefore = s.outstandingDue;
+        balanceAfter = round2(s.outstandingDue - payAmount);
       }
-
-      const available = parseFloat(bankObj.current_balance) || 0;
-      if (available < payAmount) {
-        throw new Error(`Insufficient funds in ${bankObj.bank_name}. Available balance: PKR ${available.toLocaleString()}, Required: PKR ${payAmount.toLocaleString()}`);
-      }
-
-      bankObj.current_balance = available - payAmount;
-      sourceName = `${bankObj.bank_name} (${bankObj.account_number || ''})`;
     } else {
-      sourceName = 'Cash Account';
-      // Record cash payment ledger entry
-      const cashTxnId = this.generateNextID('cash_payments', 'CP-', 'id');
-      await this.insertRecord('cash_payments', {
-        id: cashTxnId,
-        date: payment_date || new Date().toISOString().split('T')[0],
-        category: party_category,
-        paid_to: party_name,
-        amount: payAmount,
-        remarks: remarks || `Payment Voucher to ${party_name}`
-      });
+      const summary = this.getPartyPayableSummary(party_category, party_name);
+      outstandingBefore = summary.currentPayableBalance;
+      balanceAfter = Math.max(0, round2(outstandingBefore - payAmount));
     }
 
-    // 2. Fetch Outstanding Summary for Party
-    const partySummary = this.getPartyPayableSummary(party_category, party_name);
-    const outstandingBefore = partySummary.currentPayableBalance;
-    const balanceAfter = Math.max(0, outstandingBefore - payAmount);
+    bankObj.current_balance = round2(available - payAmount);
+    const sourceName = `${bankObj.bank_name}${bankObj.account_number ? ` (${bankObj.account_number})` : ''}`;
+    const narration = (description && description.trim()) || this.buildNarration(
+      payment_type === 'Payment' ? 'payment' : payment_type.toLowerCase(),
+      { party: party_name, category: party_category, trip, bank: bankObj.bank_name, instrument: instrument_no }
+    );
 
-    // 3. Generate Voucher Record
     const voucherNo = this.generateNextID('payments', 'PV-', 'id');
     const paymentRecord = {
       id: voucherNo,
       voucher_no: voucherNo,
-      date: payment_date || new Date().toISOString().split('T')[0],
-      payment_source: payment_source,
-      bank_id: bankObj ? bankObj.id : null,
+      date,
+      payment_date: date,
+      payment_source: 'Bank',
+      bank_id: bankObj.id,
+      bank_account: bankObj.bank_name,
       source_name: sourceName,
-      party_category: party_category,
-      party_name: party_name,
+      party_category,
+      party_name,
+      payment_type,
+      trip_id: trip ? trip.id : '',
+      vehicle: trip ? trip.vehicle : (party_category === 'Vehicles' ? party_name : ''),
+      driver: trip ? trip.driver : (party_category === 'Drivers' ? party_name : ''),
       amount: payAmount,
       outstanding_before: outstandingBefore,
       balance_after: balanceAfter,
-      payment_method: payment_method || (payment_source === 'Bank' ? 'Bank Transfer' : 'Cash'),
+      payment_method: payment_method || 'Bank Transfer',
       instrument_no: instrument_no || '',
+      cheque_no: instrument_no || '',
+      description: narration,
       remarks: remarks || '',
-      createdAt: new Date().toISOString()
+      status: 'Posted'
     };
-
     await this.insertRecord('payments', paymentRecord);
 
-    // 4. Record Bank Transaction Entry (if Bank source)
-    if (payment_source === 'Bank' && bankObj) {
-      const txnId = this.generateNextID('bank_transactions', 'TXN-', 'id');
-      const bankTxn = {
-        id: txnId,
-        date: payment_date || new Date().toISOString().split('T')[0],
-        transaction_type: 'Payment',
-        account: bankObj.bank_name,
-        bank_id: bankObj.id,
-        amount: payAmount,
-        debit: payAmount,
-        credit: 0,
-        reference_id: voucherNo,
-        paid_to: party_name,
-        description: `Payment Voucher ${voucherNo} to ${party_name} (${party_category})`,
-        balance_after: bankObj.current_balance
-      };
-      await this.insertRecord('bank_transactions', bankTxn);
-    }
+    await this.insertRecord('bank_transactions', {
+      id: this.generateNextID('bank_transactions', 'TXN-', 'id'),
+      date,
+      transaction_type: 'Payment',
+      account: bankObj.bank_name,
+      bank_id: bankObj.id,
+      reference_no: voucherNo,
+      reference_id: voucherNo,
+      party_name,
+      amount: payAmount,
+      description: narration,
+      balance_after: bankObj.current_balance,
+      status: 'Posted'
+    });
 
-    // 5. Record General Ledger Entry against Party
-    const glId = this.generateNextID('general_ledger', 'GL-', 'id');
-    const glRecord = {
-      id: glId,
-      date: payment_date || new Date().toISOString().split('T')[0],
+    await this.insertRecord('general_ledger', {
+      id: this.generateNextID('general_ledger', 'GL-', 'id'),
+      date,
+      voucher_type: 'Payment Voucher',
+      voucher_no: voucherNo,
       source_module: 'Payment Voucher',
       reference_id: voucherNo,
-      party_name: party_name,
+      account_name: bankObj.bank_name,
+      party_name,
+      description: narration,
+      debit: payAmount,
+      credit: 0,
       amount: payAmount,
-      paid_amount: payAmount,
       remaining_amount: balanceAfter,
-      payment_status: balanceAfter === 0 ? 'Completed' : 'In Process',
-      bank_name: sourceName,
-      remarks: remarks || `Voucher ${voucherNo} paid via ${payment_method || payment_source}`
-    };
-    await this.insertRecord('general_ledger', glRecord);
+      remarks: remarks || ''
+    });
 
-    await this.saveData();
     return paymentRecord;
   }
 
+  // Receipt Voucher (receivable): customer pays into a selected bank account
+  async addPaymentReceived(formData) {
+    return this.transaction(() => this._addPaymentReceived(formData));
+  }
 
-  // Process Centralized Payment
-  processPayment({ bank_id, bank_name, paid_to, payment_date, payment_method, remarks, item_payments }) {
-    // 1. Check Bank Balance
-    const banks = this.getTable('bank_accounts');
-    const bank = banks.find(b => b.id === bank_id || b.bank_name === bank_name);
-    if (!bank) {
-      throw new Error("Selected bank account not found.");
-    }
+  async _addPaymentReceived(formData) {
+    const customer = String(formData.customer || '').trim();
+    if (!customer) throw new Error('Please select the customer.');
+    const amountNum = round2(formData.amount);
+    if (amountNum <= 0) throw new Error('Please enter a valid amount.');
+    const bankAcc = (this.data.bank_accounts || []).find(b =>
+      normText(b.bank_name) === normText(formData.bank) || normText(b.id) === normText(formData.bank));
+    if (!bankAcc) throw new Error('Please select the bank account that received the payment.');
 
-    const totalPayAmount = item_payments.reduce((sum, item) => sum + (parseFloat(item.pay_amount) || 0), 0);
-    if (totalPayAmount <= 0) {
-      throw new Error("Payment amount must be greater than zero.");
-    }
+    const summary = this.getPartyPayableSummary('Customers', customer);
+    const receiptNo = this.generateNextID('payments_received', 'RV-', 'payment_id');
+    const date = formData.date || todayISO();
+    const narration = (formData.description && formData.description.trim()) ||
+      this.buildNarration('receipt', { party: customer, bank: bankAcc.bank_name, instrument: formData.reference_number });
 
-    if ((parseFloat(bank.current_balance) || 0) < totalPayAmount) {
-      throw new Error(`Insufficient funds in bank account ${bank.bank_name}. Available: PKR ${parseFloat(bank.current_balance).toLocaleString()}, Required: PKR ${totalPayAmount.toLocaleString()}`);
-    }
+    const record = {
+      id: receiptNo,
+      payment_id: receiptNo,
+      date,
+      customer,
+      party_name: customer,
+      payment_method: formData.payment_method || 'Bank Transfer',
+      bank: bankAcc.bank_name,
+      bank_id: bankAcc.id,
+      amount: amountNum,
+      reference_number: formData.reference_number || '',
+      cheque_no: formData.reference_number || '',
+      description: narration,
+      remarks: formData.remarks || '',
+      outstanding_before: summary.currentPayableBalance,
+      balance_after: Math.max(0, round2(summary.currentPayableBalance - amountNum))
+    };
+    await this.insertRecord('payments_received', record);
 
-    const paymentId = this.generateNextID('payments', 'PAY-', 'id');
-    const txnId = this.generateNextID('bank_transactions', 'TXN-', 'id');
-    const glId = this.generateNextID('general_ledger', 'GL-', 'id');
-
-    // 2. Process each item payment
-    const processedReferences = [];
-
-    item_payments.forEach(item => {
-      const payAmount = parseFloat(item.pay_amount) || 0;
-      if (payAmount <= 0) return;
-
-      const sourceTable = item.source_table;
-      const recordId = item.record_id;
-      const record = (this.data[sourceTable] || []).find(r => r.id === recordId);
-
-      if (record) {
-        const totalAmount = parseFloat(record.total_amount || record.amount || record.total_cost) || 0;
-        const currentPaid = parseFloat(record.paid_amount) || 0;
-        const newPaid = currentPaid + payAmount;
-        const newRemaining = Math.max(0, totalAmount - newPaid);
-        const newStatus = newRemaining === 0 ? 'Completed' : 'In Process';
-
-        record.paid_amount = newPaid;
-        record.remaining_amount = newRemaining;
-        record.payment_status = newStatus;
-        processedReferences.push(`${item.reference_id} (PKR ${payAmount.toLocaleString()})`);
-      }
+    bankAcc.current_balance = round2(toNum(bankAcc.current_balance) + amountNum);
+    await this.insertRecord('bank_transactions', {
+      id: this.generateNextID('bank_transactions', 'TXN-', 'id'),
+      date,
+      transaction_type: 'Deposit',
+      account: bankAcc.bank_name,
+      bank_id: bankAcc.id,
+      reference_no: receiptNo,
+      reference_id: receiptNo,
+      party_name: customer,
+      amount: amountNum,
+      description: narration,
+      balance_after: bankAcc.current_balance,
+      status: 'Posted'
     });
 
-    // 3. Deduct Bank Balance
-    const newBankBalance = (parseFloat(bank.current_balance) || 0) - totalPayAmount;
-    bank.current_balance = newBankBalance;
+    await this.insertRecord('payment_history', {
+      id: this.generateNextID('payment_history', 'HIST-', 'id'),
+      payment_id: receiptNo,
+      date,
+      amount: amountNum,
+      type: 'Received',
+      reference: formData.reference_number || receiptNo,
+      remarks: narration
+    });
 
-    // 4. Record Bank Ledger Entry
-    const bankTxn = {
-      id: txnId,
-      date: payment_date || new Date().toISOString().split('T')[0],
-      transaction_type: 'Payment',
-      account: bank.bank_name,
-      bank_id: bank.id,
-      amount: totalPayAmount,
-      debit: totalPayAmount,
-      credit: 0,
-      reference_id: paymentId,
-      paid_to: paid_to,
-      description: `Payment to ${paid_to}: ${processedReferences.join(', ')}`,
-      balance_after: newBankBalance
-    };
-    this.insertRecord('bank_transactions', bankTxn);
+    await this.insertRecord('general_ledger', {
+      id: this.generateNextID('general_ledger', 'GL-', 'id'),
+      date,
+      voucher_type: 'Receipt Voucher',
+      voucher_no: receiptNo,
+      source_module: 'Payment Received',
+      reference_id: receiptNo,
+      account_name: bankAcc.bank_name,
+      party_name: customer,
+      description: narration,
+      debit: 0,
+      credit: amountNum,
+      amount: amountNum,
+      remaining_amount: record.balance_after,
+      remarks: formData.remarks || ''
+    });
 
-    // 5. Record Payment Record
-    const paymentRecord = {
-      id: paymentId,
-      payment_date: payment_date || new Date().toISOString().split('T')[0],
-      bank_id: bank.id,
-      bank_name: bank.bank_name,
-      paid_to: paid_to,
-      amount: totalPayAmount,
-      payment_method: payment_method || 'Bank Transfer',
-      remarks: remarks || '',
-      item_details: item_payments,
-      references: processedReferences.join(', ')
-    };
-    this.insertRecord('payments', paymentRecord);
-
-    // 6. Record General Ledger Entry
-    const glRecord = {
-      id: glId,
-      date: payment_date || new Date().toISOString().split('T')[0],
-      source_module: 'Payment Entry',
-      reference_id: paymentId,
-      party_name: paid_to,
-      amount: totalPayAmount,
-      paid_amount: totalPayAmount,
-      remaining_amount: 0,
-      payment_status: 'Completed',
-      bank_id: bank.id,
-      bank_name: bank.bank_name,
-      remarks: remarks || `Paid via ${payment_method || 'Bank'}`
-    };
-    this.insertRecord('general_ledger', glRecord);
-
-    this.saveData();
-    return paymentRecord;
+    return record;
   }
 
   // User Management & Authentication

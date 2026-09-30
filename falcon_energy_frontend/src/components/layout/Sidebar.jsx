@@ -4,7 +4,7 @@ import { hasPermission } from '../../services/permissionService';
 
 const MASTER_DATA_IDS = [
   'masterData', 'vehicles', 'transporters', 'sources', 'destinations', 'customers',
-  'workshops', 'maint_heads', 'documents', 'vendors', 'drivers', 'tyres',
+  'workshops', 'maint_heads', 'documents', 'vendors', 'suppliers', 'drivers', 'tyres',
   'tyre_brands', 'cash', 'fuel_pump', 'engine_oil', 'bank_accounts',
   'vehicle_category', 'tanker_ownership'
 ];
@@ -55,7 +55,7 @@ export function Sidebar({ activeTab, setActiveTab, currentUser, onLogout }) {
         <div className="sidebar-scroll" style={{ flex: 1 }}>
           <div className="sidebar-section-label">Navigation</div>
           {allowedNavItems.map(item => {
-            const isActive = item.ids.includes(activeTab);
+            const isActive = item.ids.includes(activeTab) || (item.id === 'reports' && activeTab.startsWith('rpt_'));
             const Icon = item.icon;
             return (
               <button

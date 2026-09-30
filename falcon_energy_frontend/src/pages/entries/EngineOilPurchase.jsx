@@ -27,12 +27,17 @@ const config = {
     { key: 'remarks', label: 'Remarks', type: 'textarea', placeholder: 'Vendor invoice number or delivery notes' },
   ],
   defaultValues: { date: new Date().toISOString().split('T')[0], vendor: '', oil_name: 'Shell Rimula R4 15W-40', quantity: '', amount: '', remarks: '' },
-  onBeforeSave: (record) => {
+  onBeforeSave: (record, { original } = {}) => {
+    // On edit, undo the previous purchase quantity first so stock is not double counted
+    const oldQty = parseFloat(original?.quantity) || 0;
+    if (original && oldQty > 0) dbService.updateEngineOilStock(original.oil_name, -oldQty);
     // Increment Engine Oil Stock
     const qty = parseFloat(record.quantity) || 0;
-    if (qty > 0) {
-      dbService.updateEngineOilStock(record.oil_name, qty);
-    }
+    if (qty > 0) dbService.updateEngineOilStock(record.oil_name, qty);
+  },
+  onBeforeDelete: (record) => {
+    const qty = parseFloat(record.quantity) || 0;
+    if (qty > 0) dbService.updateEngineOilStock(record.oil_name, -qty);
   }
 };
 

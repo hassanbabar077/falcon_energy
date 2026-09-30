@@ -1,147 +1,137 @@
-import React, { useState, useEffect } from 'react';
-import { CreditCard, Landmark, DollarSign, CheckCircle, AlertTriangle, Printer, RefreshCw, FileText, ArrowRight, Wallet, UserCheck, ShieldCheck } from 'lucide-react';
-import { dbService } from '../../services/db';
+import React, { useState, useEffect, useMemo } from 'react';
+import { CreditCard, Landmark, CheckCircle, AlertTriangle, Printer, RefreshCw, FileText, Truck, Wallet, ClipboardCheck } from 'lucide-react';
+import { dbService, PAYABLE_CATEGORIES, toNum } from '../../services/db';
+import { VoucherPrintModal } from '../../components/VoucherPrint';
+
+const pkr = (n) => `PKR ${Math.round(toNum(n)).toLocaleString()}`;
+
+const CATEGORY_LABELS = {
+  'Vendors': 'Vendors & Suppliers of Parts / Oil / Tyres',
+  'Workshops': 'Workshops (Maintenance)',
+  'Fuel Pumps': 'Fuel Pumps',
+  'Drivers': 'Drivers (Trip Advance / Settlement)',
+  'Vehicles': 'Vehicles (Trip Advance / Settlement)',
+  'Personal Expenses': 'Personal Expenses & Misc'
+};
+
+const PAYMENT_TYPES = [
+  { id: 'Advance', label: 'Trip Advance', hint: 'Advance for the running trip' },
+  { id: 'Settlement', label: 'Final Due Settlement', hint: 'Pay the final due of a delivered trip' }
+];
 
 export function PaymentEntry() {
-  // Source selection state
-  const [paymentSource, setPaymentSource] = useState('Bank'); // 'Bank' or 'Cash'
   const [bankAccounts, setBankAccounts] = useState([]);
   const [selectedBankId, setSelectedBankId] = useState('');
-  const [selectedBank, setSelectedBank] = useState(null);
 
-  // Party selection state
-  const [partyCategory, setPartyCategory] = useState('Vendors'); // 'Vendors', 'Workshops', 'Fuel Pumps', 'Drivers', 'Vehicles'
-  const [partyList, setPartyList] = useState([]);
+  const [partyCategory, setPartyCategory] = useState('Vendors');
   const [selectedParty, setSelectedParty] = useState('');
-  const [partySummary, setPartySummary] = useState({ totalAccruedCost: 0, totalPaidAmount: 0, currentPayableBalance: 0, pendingItems: [] });
+  const [paymentType, setPaymentType] = useState('Payment');
+  const [settlementTripId, setSettlementTripId] = useState('');
 
-  // Payment Details state
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [payAmount, setPayAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
   const [instrumentNo, setInstrumentNo] = useState('');
   const [remarks, setRemarks] = useState('');
+  const [description, setDescription] = useState('');
+  const [descriptionEdited, setDescriptionEdited] = useState(false);
 
-  // UI & Recent Vouchers state
   const [recentVouchers, setRecentVouchers] = useState([]);
-  const [selectedVoucherForPrint, setSelectedVoucherForPrint] = useState(null);
+  const [voucherToPrint, setVoucherToPrint] = useState(null);
   const [toast, setToast] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Load initial bank & party list
   const loadInitialData = () => {
     const banks = dbService.getTable('bank_accounts');
     setBankAccounts(banks);
-    if (banks.length > 0 && !selectedBankId) {
-      setSelectedBankId(banks[0].id);
-      setSelectedBank(banks[0]);
-    }
-
-    const vouchers = dbService.getTable('payments');
-    setRecentVouchers([...vouchers].reverse());
+    if (banks.length > 0 && !selectedBankId) setSelectedBankId(banks[0].id);
+    setRecentVouchers([...dbService.getTable('payments')].reverse());
   };
 
-  useEffect(() => {
-    loadInitialData();
-  }, []);
+  useEffect(() => { loadInitialData(); }, []);
 
-  // Update selected bank when dropdown changes
-  useEffect(() => {
-    if (selectedBankId) {
-      const b = bankAccounts.find(x => x.id === selectedBankId);
-      setSelectedBank(b || null);
-    }
-  }, [selectedBankId, bankAccounts]);
+  const isTripParty = partyCategory === 'Vehicles' || partyCategory === 'Drivers';
+  const selectedBank = bankAccounts.find(b => b.id === selectedBankId) || null;
+  const partyList = useMemo(() => dbService.getPartyListByCategory(partyCategory), [partyCategory, recentVouchers]);
 
-  // Update party list when category changes
+  // Reset dependent selections when the category changes
   useEffect(() => {
-    const list = dbService.getPartyListByCategory(partyCategory);
-    setPartyList(list);
-    if (list.length > 0) {
-      setSelectedParty(list[0]);
-    } else {
-      setSelectedParty('');
-      setPartySummary({ totalAccruedCost: 0, totalPaidAmount: 0, currentPayableBalance: 0, pendingItems: [] });
-    }
+    setSelectedParty(partyList[0] || '');
+    setPaymentType(isTripParty ? 'Advance' : 'Payment');
+    setSettlementTripId('');
   }, [partyCategory]);
 
-  // Update party financial summary when selected party changes
+  const activeTrip = useMemo(() => {
+    if (!isTripParty || !selectedParty) return null;
+    return partyCategory === 'Vehicles' ? dbService.getVehicleActiveTrip(selectedParty) : dbService.getDriverActiveTrip(selectedParty);
+  }, [partyCategory, selectedParty, recentVouchers]);
+
+  const dueTrips = useMemo(() => {
+    if (!isTripParty || !selectedParty) return [];
+    return dbService.getTripsWithOutstandingDue(partyCategory === 'Vehicles' ? { vehicle: selectedParty } : { driver: selectedParty });
+  }, [partyCategory, selectedParty, recentVouchers]);
+
   useEffect(() => {
-    if (selectedParty) {
-      const summary = dbService.getPartyPayableSummary(partyCategory, selectedParty);
-      setPartySummary(summary);
-    } else {
-      setPartySummary({ totalAccruedCost: 0, totalPaidAmount: 0, currentPayableBalance: 0, pendingItems: [] });
-    }
-  }, [partyCategory, selectedParty]);
+    if (paymentType === 'Settlement') setSettlementTripId(dueTrips[0]?.trip.id || '');
+  }, [paymentType, dueTrips]);
 
-  // Available liquidity balance
-  const availableSourceBalance = paymentSource === 'Bank' ? (parseFloat(selectedBank?.current_balance) || 0) : Infinity;
+  const tripForVoucher = paymentType === 'Advance' ? activeTrip : paymentType === 'Settlement' ? dbService._findTrip(settlementTripId) : null;
+  const tripSettlement = useMemo(() => (tripForVoucher ? dbService.getTripSettlement(tripForVoucher.id) : null), [tripForVoucher, recentVouchers]);
 
-  // Auto fill full payable balance
-  const handlePayFullOutstanding = () => {
-    if (partySummary.currentPayableBalance > 0) {
-      setPayAmount(partySummary.currentPayableBalance.toString());
-    }
+  const partySummary = useMemo(() => (
+    !isTripParty && selectedParty
+      ? dbService.getPartyPayableSummary(partyCategory, selectedParty)
+      : { totalAccruedCost: 0, totalPaidAmount: 0, currentPayableBalance: 0, entries: [] }
+  ), [partyCategory, selectedParty, isTripParty, recentVouchers]);
+
+  // Auto description (editable) – refreshed while the user has not typed their own
+  const autoDescription = selectedParty ? dbService.buildNarration(
+    paymentType === 'Payment' ? 'payment' : paymentType.toLowerCase(),
+    { party: selectedParty, category: partyCategory, trip: tripForVoucher, bank: selectedBank?.bank_name, instrument: instrumentNo }
+  ) : '';
+  useEffect(() => {
+    if (!descriptionEdited) setDescription(autoDescription);
+  }, [autoDescription, descriptionEdited]);
+
+  const outstanding = paymentType === 'Settlement' ? (tripSettlement?.outstandingDue || 0) : partySummary.currentPayableBalance;
+  const availableBalance = toNum(selectedBank?.current_balance);
+
+  const resetForm = () => {
+    setPayAmount('');
+    setInstrumentNo('');
+    setRemarks('');
+    setDescriptionEdited(false);
   };
 
-  // Submit Payment Voucher Form
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    const amt = parseFloat(payAmount) || 0;
-    if (amt <= 0) {
-      setToast({ type: 'error', message: 'Please enter a valid payment amount greater than 0.' });
-      return;
-    }
-
-    if (!selectedParty) {
-      setToast({ type: 'error', message: 'Please select a valid party/entity to receive payment.' });
-      return;
-    }
-
-    if (paymentSource === 'Bank') {
-      if (!selectedBank) {
-        setToast({ type: 'error', message: 'Please select a Bank Account.' });
-        return;
-      }
-      if (amt > availableSourceBalance) {
-        setToast({ type: 'error', message: `Insufficient bank balance! Available: PKR ${availableSourceBalance.toLocaleString()}, Amount: PKR ${amt.toLocaleString()}` });
-        return;
-      }
-    }
+    const amt = toNum(payAmount);
+    if (amt <= 0) return setToast({ type: 'error', message: 'Please enter a valid payment amount greater than 0.' });
+    if (!selectedParty) return setToast({ type: 'error', message: 'Please select the party to pay.' });
+    if (!selectedBank) return setToast({ type: 'error', message: 'Please select a bank account.' });
+    if (amt > availableBalance) return setToast({ type: 'error', message: `Insufficient bank balance. Available: ${pkr(availableBalance)}` });
+    if (paymentType === 'Advance' && !activeTrip) return setToast({ type: 'error', message: `${selectedParty} has no running trip. Create the trip first, then pay the advance.` });
+    if (paymentType === 'Settlement' && !settlementTripId) return setToast({ type: 'error', message: 'No trip with an outstanding final due is selected.' });
 
     try {
       setIsSubmitting(true);
-
       const voucher = await dbService.processPaymentVoucher({
-        payment_source: paymentSource,
         bank_id: selectedBankId,
         party_category: partyCategory,
         party_name: selectedParty,
+        payment_type: paymentType,
+        trip_id: tripForVoucher?.id || '',
         payment_date: paymentDate,
         amount: amt,
         payment_method: paymentMethod,
         instrument_no: instrumentNo,
-        remarks: remarks
+        description,
+        remarks
       });
-
-      setToast({ type: 'success', message: `Payment Voucher #${voucher.voucher_no} generated and saved to MySQL!` });
-      
-      // Auto open print modal for generated voucher
-      setSelectedVoucherForPrint(voucher);
-
-      // Reset form fields & reload balances
-      setPayAmount('');
-      setInstrumentNo('');
-      setRemarks('');
+      setToast({ type: 'success', message: `Voucher ${voucher.voucher_no} posted: ${voucher.description}` });
+      setVoucherToPrint(voucher);
+      resetForm();
       loadInitialData();
-
-      // Refresh party summary
-      if (selectedParty) {
-        setPartySummary(dbService.getPartyPayableSummary(partyCategory, selectedParty));
-      }
-      setTimeout(() => window.location.reload(), 1200);
     } catch (err) {
       setToast({ type: 'error', message: err.message || 'Failed to process payment voucher.' });
     } finally {
@@ -151,304 +141,180 @@ export function PaymentEntry() {
 
   return (
     <div className="crud-container" style={{ paddingBottom: '80px' }}>
-      {/* Header Banner */}
-      <div className="crud-header-card" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#ffffff' }}>
+      <div className="crud-header-card">
         <div className="crud-header-left">
-          <div className="crud-header-icon" style={{ background: '#0d9488', color: '#ffffff' }}>
-            <FileText size={24} />
-          </div>
+          <div className="crud-header-icon"><FileText size={24} /></div>
           <div>
-            <h2 className="crud-header-title" style={{ color: '#ffffff' }}>Payment Voucher Generator</h2>
-            <p className="crud-header-sub" style={{ color: '#94a3b8' }}>
-              Issue financial payment vouchers against Vendors, Workshops, Fuel Pumps, Drivers, and Vehicles from Cash or Bank Accounts.
-            </p>
+            <h2 className="crud-header-title">Payment Voucher (Payables)</h2>
+            <p className="crud-header-sub">Pay vendors, workshops, fuel pumps, drivers, vehicles and personal expenses from a bank account.</p>
           </div>
         </div>
-        <button onClick={loadInitialData} className="btn btn-ghost" style={{ color: '#cbd5e1', borderColor: '#334155' }}>
-          <RefreshCw size={16} />
-          <span>Refresh Data</span>
-        </button>
+        <button onClick={loadInitialData} className="btn btn-ghost"><RefreshCw size={16} /> Refresh</button>
       </div>
 
-      {/* Main Voucher Generation Card */}
-      <div style={{ background: '#ffffff', borderRadius: '14px', border: '1px solid #e2e8f0', padding: '24px', marginBottom: '24px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)' }}>
+      <div className="panel-card">
         <form onSubmit={handleSubmit}>
-          {/* Top Control Bar: Source & Voucher Date */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px', marginBottom: '24px', paddingBottom: '20px', borderBottom: '1px solid #f1f5f9' }}>
-            
-            {/* Payment Source: Bank Account */}
-            <div>
-              <label className="crud-form-label" style={{ fontWeight: '700', color: '#0f172a', marginBottom: '8px', display: 'block' }}>
-                Payment Source ("From") <span className="crud-required-star">*</span>
-              </label>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button
-                  type="button"
-                  className="btn btn-teal"
-                  style={{ flex: 1, padding: '10px 14px', fontWeight: '700', justifyContent: 'center', cursor: 'default' }}
-                >
-                  <Landmark size={18} />
-                  <span>Bank Account</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Bank Account Dropdown */}
-            <div className="report-control-group">
-              <label className="crud-form-label" style={{ fontWeight: '700' }}>Select Bank Account *</label>
-              <select
-                value={selectedBankId}
-                onChange={e => setSelectedBankId(e.target.value)}
-                className="crud-form-select"
-                required
-              >
+          {/* Source & date */}
+          <div className="form-grid form-grid--3">
+            <div className="crud-form-field">
+              <label className="crud-form-label"><Landmark size={13} /> Pay From (Bank Account) *</label>
+              <select value={selectedBankId} onChange={e => setSelectedBankId(e.target.value)} className="crud-form-select" required>
+                {bankAccounts.length === 0 && <option value="">No bank account in master data</option>}
                 {bankAccounts.map(b => (
-                  <option key={b.id} value={b.id}>
-                    {b.bank_name} - {b.account_number} (Bal: PKR {(parseFloat(b.current_balance) || 0).toLocaleString()})
-                  </option>
+                  <option key={b.id} value={b.id}>{b.bank_name} - {b.account_number} (Bal: {pkr(b.current_balance)})</option>
                 ))}
               </select>
             </div>
-
-            {/* Voucher Date */}
-            <div className="report-control-group">
-              <label className="crud-form-label" style={{ fontWeight: '700' }}>Voucher Date *</label>
-              <input
-                type="date"
-                value={paymentDate}
-                onChange={e => setPaymentDate(e.target.value)}
-                className="crud-form-input"
-                required
-              />
+            <div className="crud-form-field">
+              <label className="crud-form-label">Voucher Date *</label>
+              <input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} className="crud-form-input" required />
             </div>
-          </div>
-
-          {/* Section: Party Target & Live Payable Ledger Summary */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '24px' }}>
-            
-            {/* Party Category & Entity Selector */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <label className="crud-form-label" style={{ fontWeight: '700', color: '#0f172a' }}>
-                  Payment To ("Category") *
-                </label>
-                <select
-                  value={partyCategory}
-                  onChange={e => setPartyCategory(e.target.value)}
-                  className="crud-form-select"
-                  style={{ fontWeight: '600' }}
-                >
-                  <option value="Vendors">Vendors & Suppliers</option>
-                  <option value="Customers">Customers (Receivables & Clients)</option>
-                  <option value="Workshops">Workshops (Maintenance)</option>
-                  <option value="Fuel Pumps">Fuel Pumps (Fuel Stations)</option>
-                  <option value="Drivers">Drivers (Salaries & Advances)</option>
-                  <option value="Personal Expenses">Personal Expenses & Misc</option>
-                  <option value="Vehicles">Vehicles & Transporters</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="crud-form-label" style={{ fontWeight: '700', color: '#0f172a' }}>
-                  Select {partyCategory.slice(0, -1)} / Entity *
-                </label>
-                <select
-                  value={selectedParty}
-                  onChange={e => setSelectedParty(e.target.value)}
-                  className="crud-form-select"
-                  style={{ fontWeight: '700', color: '#0d9488', fontSize: '15px' }}
-                  required
-                >
-                  {partyList.length === 0 ? (
-                    <option value="">No {partyCategory} registered in master data</option>
-                  ) : (
-                    partyList.map(p => (
-                      <option key={p} value={p}>{p}</option>
-                    ))
-                  )}
-                </select>
-              </div>
-            </div>
-
-            {/* Live Financial Summary Widget for Selected Party */}
-            <div style={{
-              background: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-              borderRadius: '12px',
-              padding: '18px 20px',
-              border: '1px solid #cbd5e1',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Ledger Account Balance
-                </div>
-                <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '99px', background: '#e0f2fe', color: '#0369a1', fontWeight: '700' }}>
-                  {partyCategory}
-                </span>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b' }}>Total Invoiced/Costs</div>
-                  <div style={{ fontSize: '15px', fontWeight: '700', color: '#1e293b', fontFamily: 'monospace' }}>
-                    PKR {(partySummary.totalAccruedCost || 0).toLocaleString()}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b' }}>Total Past Payments</div>
-                  <div style={{ fontSize: '15px', fontWeight: '700', color: '#166534', fontFamily: 'monospace' }}>
-                    PKR {(partySummary.totalPaidAmount || 0).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{
-                background: '#ffffff',
-                borderRadius: '8px',
-                padding: '12px',
-                border: '1px solid #e2e8f0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between'
-              }}>
-                <div>
-                  <div style={{ fontSize: '11px', fontWeight: '700', color: '#dc2626', textTransform: 'uppercase' }}>
-                    Total Outstanding Payable
-                  </div>
-                  <div style={{ fontSize: '22px', fontWeight: '900', color: '#dc2626', fontFamily: 'monospace', lineHeight: '1.2' }}>
-                    PKR {(partySummary.currentPayableBalance || 0).toLocaleString()}
-                  </div>
-                </div>
-
-                {partySummary.currentPayableBalance > 0 && (
-                  <button
-                    type="button"
-                    onClick={handlePayFullOutstanding}
-                    className="btn btn-ghost"
-                    style={{ fontSize: '11px', fontWeight: '800', color: '#0d9488', borderColor: '#ccfbf1', background: '#f0fdfa' }}
-                  >
-                    Pay Full
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Payment Amount & Method Inputs */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '20px' }}>
-            
-            {/* Amount to Pay */}
-            <div className="report-control-group">
-              <label className="crud-form-label" style={{ fontWeight: '700', color: '#0f172a' }}>
-                Payment Amount to Pay (PKR) <span className="crud-required-star">*</span>
-              </label>
-              <input
-                type="number"
-                min="1"
-                placeholder="Enter amount to pay..."
-                value={payAmount}
-                onChange={e => setPayAmount(e.target.value)}
-                className="crud-form-input"
-                style={{ fontSize: '16px', fontWeight: '800', color: '#0d9488', fontFamily: 'monospace' }}
-                required
-              />
-            </div>
-
-            {/* Payment Method */}
-            <div className="report-control-group">
-              <label className="crud-form-label" style={{ fontWeight: '700' }}>Payment Method *</label>
-              <select
-                value={paymentMethod}
-                onChange={e => setPaymentMethod(e.target.value)}
-                className="crud-form-select"
-                required
-              >
-                {paymentSource === 'Bank' ? (
-                  <>
-                    <option value="Bank Transfer">Bank Transfer / IBFT</option>
-                    <option value="Cheque">Cheque</option>
-                    <option value="Online Payment">Online Transfer</option>
-                    <option value="Pay Order">Pay Order / Demand Draft</option>
-                  </>
-                ) : (
-                  <option value="Cash">Cash Payment</option>
-                )}
+            <div className="crud-form-field">
+              <label className="crud-form-label">Payment Category *</label>
+              <select value={partyCategory} onChange={e => setPartyCategory(e.target.value)} className="crud-form-select">
+                {PAYABLE_CATEGORIES.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
               </select>
             </div>
+          </div>
 
-            {/* Instrument / Cheque No */}
-            <div className="report-control-group">
-              <label className="crud-form-label" style={{ fontWeight: '600' }}>Cheque / Ref No (Optional)</label>
-              <input
-                type="text"
-                placeholder="e.g. Chq #481029 or Txn Ref..."
-                value={instrumentNo}
-                onChange={e => setInstrumentNo(e.target.value)}
-                className="crud-form-input"
-              />
+          <div className="form-grid form-grid--2" style={{ marginTop: '16px' }}>
+            {/* Party + type */}
+            <div className="form-stack">
+              <div className="crud-form-field">
+                <label className="crud-form-label">Pay To ({partyCategory === 'Personal Expenses' ? 'Head' : partyCategory.replace(/s$/, '')}) *</label>
+                <select value={selectedParty} onChange={e => { setSelectedParty(e.target.value); setDescriptionEdited(false); }} className="crud-form-select crud-form-select--strong" required>
+                  {partyList.length === 0 ? <option value="">No {partyCategory} in master data</option> : partyList.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              {isTripParty && (
+                <div className="crud-form-field">
+                  <label className="crud-form-label">Voucher Type *</label>
+                  <div className="segmented">
+                    {PAYMENT_TYPES.map(pt => (
+                      <button type="button" key={pt.id} className={paymentType === pt.id ? 'active' : ''} onClick={() => { setPaymentType(pt.id); setDescriptionEdited(false); }} title={pt.hint}>
+                        {pt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {paymentType === 'Settlement' && (
+                <div className="crud-form-field">
+                  <label className="crud-form-label">Trip with Final Due *</label>
+                  <select value={settlementTripId} onChange={e => setSettlementTripId(e.target.value)} className="crud-form-select">
+                    {dueTrips.length === 0 && <option value="">No outstanding final due for {selectedParty}</option>}
+                    {dueTrips.map(({ trip, settlement }) => (
+                      <option key={trip.id} value={trip.id}>{trip.id} · {trip.vehicle} · unloaded {trip.unloading_date} · due {pkr(settlement.outstandingDue)}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Live context panel */}
+            {paymentType === 'Advance' ? (
+              <div className="context-card">
+                <div className="context-card-head"><Truck size={15} /> Running Trip</div>
+                {activeTrip ? (
+                  <>
+                    <div className="context-row"><span>Trip</span><strong>{activeTrip.id}</strong></div>
+                    <div className="context-row"><span>Vehicle / Driver</span><strong>{activeTrip.vehicle} · {activeTrip.driver && activeTrip.driver !== '-' ? activeTrip.driver : '—'}</strong></div>
+                    <div className="context-row"><span>Route</span><strong>{dbService._tripRoute(activeTrip) || '—'} · loaded {activeTrip.loading_date}</strong></div>
+                    <div className="context-row"><span>Carry-forward advance</span><strong>{pkr(tripSettlement?.previousBalance)}</strong></div>
+                    <div className="context-row"><span>Advances paid so far</span><strong>{pkr(tripSettlement?.advanceTotal)} ({tripSettlement?.advances.length || 0})</strong></div>
+                    <div className="context-row context-row--total"><span>Total advance available</span><strong>{pkr(tripSettlement?.totalAdvance)}</strong></div>
+                  </>
+                ) : (
+                  <div className="context-empty">No running trip for {selectedParty || 'this party'}. An advance can only be paid against a trip that has not been delivered yet.</div>
+                )}
+              </div>
+            ) : paymentType === 'Settlement' ? (
+              <div className="context-card">
+                <div className="context-card-head"><ClipboardCheck size={15} /> Trip Settlement</div>
+                {tripSettlement ? (
+                  <>
+                    <div className="context-row"><span>Total advance</span><strong>{pkr(tripSettlement.totalAdvance)}</strong></div>
+                    <div className="context-row"><span>Trip expenses</span><strong>{pkr(tripSettlement.expenseTotal)}</strong></div>
+                    <div className="context-row"><span>Final due</span><strong>{pkr(tripSettlement.finalDue)}</strong></div>
+                    <div className="context-row"><span>Already settled</span><strong>{pkr(tripSettlement.settledAmount)}</strong></div>
+                    <div className="context-row context-row--due"><span>Outstanding due</span><strong>{pkr(tripSettlement.outstandingDue)}</strong></div>
+                  </>
+                ) : <div className="context-empty">Select a trip with a final due.</div>}
+              </div>
+            ) : (
+              <div className="context-card">
+                <div className="context-card-head"><Wallet size={15} /> Ledger Balance · {selectedParty || '—'}</div>
+                <div className="context-row"><span>Total billed / costs</span><strong>{pkr(partySummary.totalAccruedCost)}</strong></div>
+                <div className="context-row"><span>Total paid</span><strong>{pkr(partySummary.totalPaidAmount)}</strong></div>
+                <div className="context-row context-row--due"><span>Outstanding payable</span><strong>{pkr(partySummary.currentPayableBalance)}</strong></div>
+              </div>
+            )}
+          </div>
+
+          {/* Amount & method */}
+          <div className="form-grid form-grid--3" style={{ marginTop: '16px' }}>
+            <div className="crud-form-field">
+              <label className="crud-form-label">Amount (PKR) *</label>
+              <div className="input-with-action">
+                <input type="number" min="1" placeholder="Enter amount..." value={payAmount} onChange={e => setPayAmount(e.target.value)} className="crud-form-input crud-form-input--amount" required />
+                {paymentType !== 'Advance' && outstanding > 0 && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPayAmount(String(Math.round(outstanding * 100) / 100))}>Pay Full</button>
+                )}
+              </div>
+            </div>
+            <div className="crud-form-field">
+              <label className="crud-form-label">Payment Method *</label>
+              <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="crud-form-select">
+                <option value="Bank Transfer">Bank Transfer / IBFT</option>
+                <option value="Cheque">Cheque</option>
+                <option value="Online Payment">Online Transfer</option>
+                <option value="Pay Order">Pay Order / Demand Draft</option>
+              </select>
+            </div>
+            <div className="crud-form-field">
+              <label className="crud-form-label">Cheque / Ref No (Optional)</label>
+              <input type="text" placeholder="e.g. Chq #481029" value={instrumentNo} onChange={e => setInstrumentNo(e.target.value)} className="crud-form-input" />
             </div>
           </div>
 
-          {/* Remarks Input */}
-          <div style={{ marginBottom: '24px' }}>
-            <label className="crud-form-label" style={{ fontWeight: '600' }}>Voucher Remarks / Notes (Optional)</label>
-            <input
-              type="text"
-              placeholder="e.g. Payment for monthly maintenance bills, tyre supply settlement, etc."
-              value={remarks}
-              onChange={e => setRemarks(e.target.value)}
-              className="crud-form-input"
-            />
+          <div className="form-grid form-grid--2" style={{ marginTop: '16px' }}>
+            <div className="crud-form-field">
+              <label className="crud-form-label">Description (shown in reports) *</label>
+              <input type="text" value={description} onChange={e => { setDescription(e.target.value); setDescriptionEdited(true); }} className="crud-form-input" required />
+              {descriptionEdited && <button type="button" className="link-btn" onClick={() => setDescriptionEdited(false)}>Use automatic description</button>}
+            </div>
+            <div className="crud-form-field">
+              <label className="crud-form-label">Remarks (Optional)</label>
+              <input type="text" placeholder="Internal notes" value={remarks} onChange={e => setRemarks(e.target.value)} className="crud-form-input" />
+            </div>
           </div>
 
-          {/* Submit Action Button */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-            <button
-              type="submit"
-              disabled={isSubmitting || !selectedParty || !payAmount || parseFloat(payAmount) <= 0}
-              className="btn btn-teal"
-              style={{ padding: '14px 28px', fontSize: '15px', fontWeight: '800', borderRadius: '10px' }}
-            >
-              <CheckCircle size={20} />
-              <span>Generate & Post Payment Voucher</span>
+          <div className="form-actions">
+            <button type="submit" disabled={isSubmitting || !selectedParty || toNum(payAmount) <= 0} className="btn btn-teal btn-lg">
+              <CheckCircle size={18} /> {isSubmitting ? 'Posting…' : 'Generate & Post Voucher'}
             </button>
           </div>
         </form>
       </div>
 
-      {/* Entry Logs for Selected Party */}
-      {partySummary.entries && partySummary.entries.length > 0 && (
-        <div style={{ background: '#ffffff', borderRadius: '14px', border: '1px solid #e2e8f0', padding: '20px', marginBottom: '24px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <CreditCard size={18} style={{ color: '#0d9488' }} />
-              <span>Accrued Expense Entries Logged for {selectedParty} ({partySummary.entries.length})</span>
-            </h3>
-            <span style={{ fontSize: '12px', color: '#64748b', fontWeight: '600' }}>
-              Accounting & Remaining Balance Managed at Party Level
-            </span>
+      {/* Charges logged for the party */}
+      {!isTripParty && partySummary.entries.length > 0 && (
+        <div className="crud-table-card">
+          <div className="table-card-head">
+            <h3><CreditCard size={16} /> Bills logged for {selectedParty} ({partySummary.entries.length})</h3>
           </div>
           <div className="crud-table-wrapper">
             <table className="crud-table">
-              <thead>
-                <tr>
-                  <th>Ref ID</th>
-                  <th>Date</th>
-                  <th>Description</th>
-                  <th style={{ textAlign: 'right' }}>Total Expense / Bill (PKR)</th>
-                </tr>
-              </thead>
+              <thead><tr><th>Ref</th><th>Date</th><th>Description</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
               <tbody>
-                {partySummary.entries.map((item) => (
-                  <tr key={item.id}>
+                {[...partySummary.entries].reverse().map(item => (
+                  <tr key={item.id + item.date}>
                     <td className="crud-td-code">{item.id}</td>
                     <td>{item.date}</td>
                     <td>{item.description}</td>
-                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: '700', color: '#0f172a' }}>
-                      PKR {item.total_amount.toLocaleString()}
-                    </td>
+                    <td className="num-cell">{pkr(item.total_amount)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -457,201 +323,49 @@ export function PaymentEntry() {
         </div>
       )}
 
-      {/* Recent Payment Vouchers Table */}
+      {/* Recent vouchers */}
       <div className="crud-table-card">
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: '800', color: '#0f172a', margin: 0 }}>
-            Recent Issued Payment Vouchers
-          </h3>
-          <span style={{ fontSize: '12px', color: '#64748b', fontWeight: '600' }}>
-            {recentVouchers.length} Total Vouchers Logged
-          </span>
+        <div className="table-card-head">
+          <h3>Recent Payment Vouchers</h3>
+          <span>{recentVouchers.length} vouchers</span>
         </div>
-
         <div className="crud-table-wrapper">
           <table className="crud-table">
             <thead>
               <tr>
-                <th>Voucher No</th>
-                <th>Date</th>
-                <th>Payment Source</th>
-                <th>Category</th>
-                <th>Paid To (Party)</th>
-                <th>Method</th>
-                <th style={{ textAlign: 'right' }}>Amount Paid</th>
-                <th style={{ textAlign: 'right' }}>Balance After</th>
-                <th style={{ width: '100px', textAlign: 'center' }}>Action</th>
+                <th>Voucher</th><th>Date</th><th>Type</th><th>Paid To</th><th>Description</th>
+                <th>Bank</th><th style={{ textAlign: 'right' }}>Amount</th><th style={{ textAlign: 'center' }}>Print</th>
               </tr>
             </thead>
             <tbody>
               {recentVouchers.length === 0 ? (
-                <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-                    No payment vouchers issued yet.
+                <tr><td colSpan={8} className="empty-cell">No payment vouchers issued yet.</td></tr>
+              ) : recentVouchers.slice(0, 25).map(v => (
+                <tr key={v.id}>
+                  <td className="crud-td-code">{v.voucher_no || v.id}</td>
+                  <td>{v.payment_date || v.date}</td>
+                  <td><span className={`badge ${v.payment_type === 'Advance' ? 'badge-blue' : v.payment_type === 'Settlement' ? 'badge-amber' : 'badge-teal'}`}>{v.payment_type || 'Payment'}</span></td>
+                  <td><strong>{v.party_name || v.paid_to}</strong><div className="cell-sub">{v.party_category || ''}</div></td>
+                  <td className="cell-desc">{v.description || v.remarks || '-'}</td>
+                  <td>{v.bank_account || v.bank_name || v.source_name || '-'}</td>
+                  <td className="num-cell">{pkr(v.amount)}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <button type="button" onClick={() => setVoucherToPrint(v)} className="btn btn-ghost btn-sm"><Printer size={13} /></button>
                   </td>
                 </tr>
-              ) : (
-                recentVouchers.map((v) => (
-                  <tr key={v.id}>
-                    <td className="crud-td-code">{v.voucher_no || v.id}</td>
-                    <td>{v.date}</td>
-                    <td>
-                      <span className={`badge ${v.payment_source === 'Bank' ? 'badge-blue' : 'badge-teal'}`}>
-                        {v.source_name || v.payment_source || 'Bank'}
-                      </span>
-                    </td>
-                    <td>{v.party_category || 'Vendor'}</td>
-                    <td style={{ fontWeight: '700', color: '#0f172a' }}>{v.party_name}</td>
-                    <td>{v.payment_method || 'Bank Transfer'}</td>
-                    <td style={{ textAlign: 'right', fontFamily: 'monospace', fontWeight: '800', color: '#0d9488' }}>
-                      PKR {(parseFloat(v.amount) || 0).toLocaleString()}
-                    </td>
-                    <td style={{ textAlign: 'right', fontFamily: 'monospace', color: '#64748b' }}>
-                      PKR {(parseFloat(v.balance_after) || 0).toLocaleString()}
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedVoucherForPrint(v)}
-                        className="btn btn-ghost"
-                        style={{ padding: '4px 8px', fontSize: '11px', gap: '4px' }}
-                      >
-                        <Printer size={13} />
-                        <span>Print</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
+              ))}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Printable Payment Voucher Modal */}
-      {selectedVoucherForPrint && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(4px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '20px'
-        }}>
-          <div style={{
-            background: '#ffffff', borderRadius: '16px', maxWidth: '650px', width: '100%',
-            padding: '32px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.3)', position: 'relative'
-          }}>
-            {/* Printable Receipt Content */}
-            <div id="printable-voucher">
-              {/* Receipt Header */}
-              <div style={{ borderBottom: '2px solid #0d9488', paddingBottom: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h2 style={{ fontSize: '20px', fontWeight: '900', color: '#0f172a', margin: 0, letterSpacing: '0.5px' }}>
-                    FALCON ENERGY TRANSPORT
-                  </h2>
-                  <div style={{ fontSize: '11px', color: '#64748b', fontWeight: '600', marginTop: '2px' }}>
-                    OFFICIAL PAYMENT VOUCHER RECEIPT
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '18px', fontWeight: '900', color: '#0d9488', fontFamily: 'monospace' }}>
-                    {selectedVoucherForPrint.voucher_no || selectedVoucherForPrint.id}
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#475569', fontWeight: '600' }}>
-                    Date: {selectedVoucherForPrint.date}
-                  </div>
-                </div>
-              </div>
+      <VoucherPrintModal voucher={voucherToPrint} kind="payment" onClose={() => { setVoucherToPrint(null); }} />
 
-              {/* Grid Info */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px', background: '#f8fafc', padding: '16px', borderRadius: '10px' }}>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: '700' }}>Paid From Source</div>
-                  <div style={{ fontSize: '14px', fontWeight: '700', color: '#0f172a' }}>{selectedVoucherForPrint.source_name || selectedVoucherForPrint.payment_source}</div>
-                  <div style={{ fontSize: '12px', color: '#475569' }}>Method: {selectedVoucherForPrint.payment_method}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: '700' }}>Paid To (Party)</div>
-                  <div style={{ fontSize: '15px', fontWeight: '900', color: '#0d9488' }}>{selectedVoucherForPrint.party_name}</div>
-                  <div style={{ fontSize: '12px', color: '#475569' }}>Category: {selectedVoucherForPrint.party_category || 'Vendor'}</div>
-                </div>
-              </div>
-
-              {/* Financial Totals Card */}
-              <div style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden', marginBottom: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: '#fafafa', borderBottom: '1px solid #e2e8f0', fontSize: '13px' }}>
-                  <span>Outstanding Balance Before Payment:</span>
-                  <span style={{ fontFamily: 'monospace', fontWeight: '700' }}>
-                    PKR {(parseFloat(selectedVoucherForPrint.outstanding_before) || 0).toLocaleString()}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 16px', background: '#f0fdfa', borderBottom: '1px solid #ccfbf1', fontSize: '16px' }}>
-                  <span style={{ fontWeight: '800', color: '#0d9488' }}>Amount Paid (Net Payment):</span>
-                  <span style={{ fontFamily: 'monospace', fontWeight: '900', color: '#0d9488', fontSize: '18px' }}>
-                    PKR {(parseFloat(selectedVoucherForPrint.amount) || 0).toLocaleString()}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: '#fafafa', fontSize: '13px' }}>
-                  <span>Remaining Outstanding Balance:</span>
-                  <span style={{ fontFamily: 'monospace', fontWeight: '700', color: '#dc2626' }}>
-                    PKR {(parseFloat(selectedVoucherForPrint.balance_after) || 0).toLocaleString()}
-                  </span>
-                </div>
-              </div>
-
-              {/* Instrument & Remarks */}
-              {selectedVoucherForPrint.remarks && (
-                <div style={{ marginBottom: '24px', fontSize: '12.5px', color: '#475569', background: '#f1f5f9', padding: '10px 14px', borderRadius: '8px' }}>
-                  <strong>Remarks:</strong> {selectedVoucherForPrint.remarks}
-                </div>
-              )}
-
-              {/* Signatures */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginTop: '36px', paddingTop: '16px', borderTop: '1px dashed #cbd5e1', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
-                <div>
-                  <div style={{ height: '30px' }}></div>
-                  <div style={{ borderTop: '1px solid #94a3b8', paddingTop: '4px', fontWeight: '700' }}>Prepared By</div>
-                </div>
-                <div>
-                  <div style={{ height: '30px' }}></div>
-                  <div style={{ borderTop: '1px solid #94a3b8', paddingTop: '4px', fontWeight: '700' }}>Authorized Signatory</div>
-                </div>
-                <div>
-                  <div style={{ height: '30px' }}></div>
-                  <div style={{ borderTop: '1px solid #94a3b8', paddingTop: '4px', fontWeight: '700' }}>Receiver Signature</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px' }}>
-              <button
-                type="button"
-                onClick={() => setSelectedVoucherForPrint(null)}
-                className="btn btn-ghost"
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="btn btn-teal"
-                style={{ fontWeight: '800' }}
-              >
-                <Printer size={16} />
-                <span>Print Voucher Receipt</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Toast Alert */}
       {toast && (
         <div className={`toast-box ${toast.type === 'success' ? 'toast-success' : 'toast-error'}`}>
           {toast.type === 'success' ? <CheckCircle size={18} /> : <AlertTriangle size={18} />}
           <span>{toast.message}</span>
-          <button onClick={() => setToast(null)} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', marginLeft: 'auto' }}>
-            ✕
-          </button>
+          <button onClick={() => setToast(null)} className="toast-close">✕</button>
         </div>
       )}
     </div>

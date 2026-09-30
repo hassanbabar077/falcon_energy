@@ -29,12 +29,17 @@ const config = {
     { key: 'remarks', label: 'Remarks', type: 'textarea', placeholder: 'Oil change service notes or meter reading' },
   ],
   defaultValues: { vehicle: '', trip_id: '', date: new Date().toISOString().split('T')[0], oil_name: '', quantity_used: '', status: 'Completed', remarks: '' },
-  onBeforeSave: (record) => {
+  onBeforeSave: (record, { original } = {}) => {
+    // On edit, return the previously used quantity to stock first
+    const oldQty = parseFloat(original?.quantity_used) || 0;
+    if (original && oldQty > 0) dbService.updateEngineOilStock(original.oil_name, oldQty);
+    // Decrement stock
     const qty = parseFloat(record.quantity_used) || 0;
-    if (qty > 0) {
-      // Decrement stock
-      dbService.updateEngineOilStock(record.oil_name, -qty);
-    }
+    if (qty > 0) dbService.updateEngineOilStock(record.oil_name, -qty);
+  },
+  onBeforeDelete: (record) => {
+    const qty = parseFloat(record.quantity_used) || 0;
+    if (qty > 0) dbService.updateEngineOilStock(record.oil_name, qty);
   }
 };
 
