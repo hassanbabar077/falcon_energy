@@ -4,9 +4,11 @@ import { filterAllowedCards } from '../services/permissionService';
 
 export function SectionLandingPage({ title, subtitle, icon: HeaderIcon, items, onSelectModule, currentUser }) {
   const displayItems = currentUser ? filterAllowedCards(currentUser, items) : items;
+  const lower = title.toLowerCase();
+  const theme = lower.includes('report') ? 'reports' : lower.includes('entr') ? 'entries' : lower.includes('quick') ? 'quick' : 'masters';
 
   return (
-    <div className="section-landing">
+    <div className={`section-landing section-landing--${theme}`}>
       <div className="crud-header-card section-landing-header">
         <div className="crud-header-left">
           {HeaderIcon && (
