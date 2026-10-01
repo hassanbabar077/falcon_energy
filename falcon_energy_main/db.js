@@ -97,7 +97,7 @@ export const TABLE_COLUMNS = {
   maintenance: ['id', 'date', 'vehicle', 'tanker_number', 'workshop', 'vendor', 'head', 'category', 'maintenance_type', 'meter_reading', 'description', 'amount', 'cost', 'total_amount', 'payment_status', 'status', 'remarks', 'createdAt', 'updatedAt'],
   document_register: ['id', 'document_type', 'vehicle', 'document_no', 'issue_date', 'expiry_date', 'issuing_authority', 'cost', 'status', 'remarks', 'createdAt', 'updatedAt'],
   tyre_brands: ['id', 'brand_code', 'brand_name', 'category', 'origin', 'status', 'remarks', 'createdAt', 'updatedAt'],
-  tyres_record: ['id', 'purchase_date', 'tyre_number', 'brand', 'vendor', 'size', 'pattern', 'vehicle', 'position', 'condition', 'status', 'cost', 'amount', 'total_amount', 'meter_reading', 'remarks', 'createdAt', 'updatedAt'],
+  tyres_record: ['id', 'purchase_date', 'tyre_number', 'brand', 'vendor', 'size', 'pattern', 'vehicle', 'position', 'condition_val', 'status', 'cost', 'amount', 'total_amount', 'meter_reading', 'remarks', 'createdAt', 'updatedAt'],
   fuel_pumps: ['id', 'code', 'name', 'location', 'contact_person', 'phone', 'payment_type', 'status', 'remarks', 'createdAt', 'updatedAt'],
   fuel_entries: ['id', 'date', 'vehicle', 'driver', 'trip_id', 'fuel_pump', 'vendor', 'liters', 'rate', 'amount', 'total_amount', 'payment_type', 'meter_reading', 'receipt_no', 'remarks', 'createdAt', 'updatedAt'],
   engine_oil_defination: ['id', 'code', 'name', 'brand', 'grade', 'unit', 'current_stock', 'min_stock', 'price', 'status', 'remarks', 'createdAt', 'updatedAt'],
@@ -107,10 +107,10 @@ export const TABLE_COLUMNS = {
   bank_transactions: ['id', 'date', 'account', 'transaction_type', 'reference_no', 'party_name', 'description', 'amount', 'cheque_no', 'status', 'remarks', 'createdAt', 'updatedAt'],
   payments: ['id', 'voucher_no', 'payment_date', 'date', 'party_category', 'party_name', 'party_id', 'paid_to', 'payment_source', 'payment_method', 'bank_account', 'cheque_no', 'amount', 'total_amount', 'remarks', 'status', 'createdAt', 'updatedAt'],
   general_ledger: ['id', 'date', 'account_name', 'party_name', 'voucher_type', 'voucher_no', 'description', 'debit', 'credit', 'balance', 'remarks', 'createdAt', 'updatedAt'],
-  cash_payments: ['id', 'date', 'paid_to', 'driver', 'vehicle', 'category', 'payment_type', 'type', 'head', 'amount', 'bank', 'remarks', 'createdAt', 'updatedAt'],
+  cash_payments: ['id', 'date', 'paid_to', 'driver', 'vehicle', 'category', 'payment_type', 'type_val', 'head', 'amount', 'bank', 'remarks', 'createdAt', 'updatedAt'],
   bills_register: ['id', 'bill_no', 'bill_date', 'customer', 'bill_type', 'from_date', 'to_date', 'total_trips', 'total_weight', 'total_amount', 'status', 'remarks', 'createdAt', 'updatedAt'],
   payments_received: ['id', 'payment_id', 'date', 'customer', 'party_name', 'payment_method', 'bank', 'cheque_no', 'amount', 'remarks', 'createdAt', 'updatedAt'],
-  payment_history: ['id', 'payment_id', 'date', 'amount', 'type', 'reference', 'remarks', 'createdAt', 'updatedAt']
+  payment_history: ['id', 'payment_id', 'date', 'amount', 'type_val', 'reference', 'remarks', 'createdAt', 'updatedAt']
 };
 
 export const TABLE_SCHEMAS = {
@@ -754,37 +754,65 @@ export async function readState(pool) {
   return state;
 }
 
+// Column types/lengths parsed from TABLE_SCHEMAS so values can be fitted to each column
+const COLUMN_META = Object.fromEntries(Object.entries(TABLE_SCHEMAS).map(([table, sql]) => {
+  const meta = {};
+  for (const m of sql.matchAll(/^\s*`?(\w+)`?\s+(VARCHAR|INT|TEXT|JSON|DECIMAL)(?:\((\d+)(?:,\s*\d+)?\))?/gim)) {
+    meta[m[1]] = { type: m[2].toUpperCase(), length: m[3] ? Number(m[3]) : null };
+  }
+  return [table, meta];
+}));
+
+// Record properties whose MySQL column has a different name (reserved / clashing words)
+const PROPERTY_FOR_COLUMN = { condition_val: 'condition', type_val: 'type' };
+
+// Fit a JS value to the column type so one odd value can never break the whole save.
+// The typed columns are only a readable copy - raw_data always keeps the full record.
+function toColumnValue(value, meta) {
+  if (value === undefined) return null;
+  if (!meta) return value;
+  if (meta.type === 'DECIMAL' || meta.type === 'INT') {
+    if (value === null || value === '' || typeof value === 'boolean') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    return meta.type === 'INT' ? Math.trunc(n) : n;
+  }
+  if (meta.type === 'JSON') {
+    return value === null ? null : JSON.stringify(value);
+  }
+  if (value === null) return null;
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return meta.type === 'VARCHAR' && meta.length && text.length > meta.length ? text.slice(0, meta.length) : text;
+}
+
 function mapEntityRow(table, record, fallbackId = '1') {
-  if (!record || typeof record !== 'object') return {};
-  const columns = TABLE_COLUMNS[table] || [];
+  if (!record || typeof record !== 'object') return null;
+  const meta = COLUMN_META[table] || {};
   const row = {};
 
-  for (const col of columns) {
-    let propName = col;
-    if (col === 'condition_val') propName = 'condition';
-    if (col === 'type_val') propName = 'type';
-
-    if (propName in record) {
-      const val = record[propName];
-      row[col] = (typeof val === 'object' && val !== null) ? JSON.stringify(val) : val;
-    }
+  for (const col of TABLE_COLUMNS[table] || []) {
+    const prop = PROPERTY_FOR_COLUMN[col] || col;
+    if (prop in record) row[col] = toColumnValue(record[prop], meta[col]);
   }
 
-  if (!row.id) {
-    row.id = String(record.id ?? record.code ?? record.payment_id ?? record.voucher_no ?? fallbackId);
-  }
-
+  const id = record.id ?? record.code ?? record.payment_id ?? record.voucher_no ?? fallbackId;
+  row.id = meta.id?.type === 'INT' ? (Number.parseInt(id, 10) || 1) : toColumnValue(id, meta.id);
   row.raw_data = JSON.stringify(record);
   return row;
 }
 
-function insertRowQuery(tableName, row) {
-  const keys = Object.keys(row);
-  const cols = keys.map(k => `\`${k}\``).join(', ');
-  const values = keys.map(() => '?').join(', ');
-  const queryText = `INSERT INTO \`${tableName}\` (${cols}) VALUES (${values})`;
-  const params = keys.map(k => row[k]);
-  return { queryText, params };
+// Insert many rows with a few multi-row statements instead of one query per record
+async function insertRows(connection, table, rows) {
+  if (!rows.length) return;
+  const columns = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  const colSql = columns.map(c => `\`${c}\``).join(', ');
+  const rowSql = `(${columns.map(() => '?').join(', ')})`;
+  const CHUNK = 200;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const params = chunk.flatMap(r => columns.map(c => (r[c] === undefined ? null : r[c])));
+    await connection.query(`INSERT INTO \`${table}\` (${colSql}) VALUES ${chunk.map(() => rowSql).join(', ')}`, params);
+  }
 }
 
 export async function writeState(pool, state) {
@@ -809,20 +837,31 @@ export async function writeState(pool, state) {
       }
       savedTables.push(entity);
 
-      await connection.query(`DELETE FROM \`${entity}\``);
+      const records = entity === 'company_info'
+        ? (value && typeof value === 'object' ? [value] : [])
+        : (Array.isArray(value) ? value : []);
 
-      if (entity === 'company_info' && value && typeof value === 'object') {
-        const row = mapEntityRow(entity, value, '1');
-        const { queryText, params } = insertRowQuery(entity, row);
-        await connection.query(queryText, params);
-      } else if (Array.isArray(value) && value.length > 0) {
-        for (let idx = 0; idx < value.length; idx++) {
-          const item = value[idx];
-          const row = mapEntityRow(entity, item, String(idx + 1));
-          const { queryText, params } = insertRowQuery(entity, row);
-          await connection.query(queryText, params);
+      // Duplicate ids would break the primary key and fail the whole save:
+      // keep every record, giving repeats a unique row id (raw_data keeps the original).
+      const seen = new Set();
+      const rows = [];
+      records.forEach((record, idx) => {
+        const row = mapEntityRow(entity, record, String(idx + 1));
+        if (!row) return;
+        let key = String(row.id);
+        if (seen.has(key)) {
+          let n = 2;
+          while (seen.has(`${key}#${n}`)) n++;
+          console.warn(`[writeState] Duplicate id "${key}" in ${entity}; stored as "${key}#${n}".`);
+          key = `${key}#${n}`;
+          row.id = entity === 'company_info' ? row.id : key;
         }
-      }
+        seen.add(key);
+        rows.push(row);
+      });
+
+      await connection.query(`DELETE FROM \`${entity}\``);
+      await insertRows(connection, entity, rows);
     }
 
     await connection.commit();
