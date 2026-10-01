@@ -864,7 +864,7 @@ html, body, #root { background: var(--c-bg); color: var(--c-text); }
 }
 
 /* ================================================================
-   LANDING MODULE CARDS – themed tint + elegant hover gradient
+   LANDING MODULE CARDS – themed gradient background (no hover effect)
    Each section gets its own shade of the teal theme.
    ================================================================ */
 .section-landing--masters { --card-a: #14b8a6; --card-b: #0f766e; --card-c: #134e4a; --card-tint: #f0fdfa; --card-line: #99f6e4; }
@@ -872,92 +872,38 @@ html, body, #root { background: var(--c-bg); color: var(--c-text); }
 .section-landing--reports { --card-a: #10b981; --card-b: #047857; --card-c: #064e3b; --card-tint: #ecfdf5; --card-line: #a7f3d0; }
 .section-landing--quick   { --card-a: #0ea5e9; --card-b: #0d9488; --card-c: #0f172a; --card-tint: #f0f9ff; --card-line: #bae6fd; }
 
-.section-landing .landing-card {
-  isolation: isolate;
+.section-landing .landing-card,
+.section-landing .landing-card:hover,
+.section-landing .landing-card:active {
   overflow: hidden;
-  border: 1px solid var(--card-line);
-  background:
-    radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--card-a) 14%, transparent) 0%, transparent 55%),
-    linear-gradient(160deg, #ffffff 0%, var(--card-tint) 100%);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 4px 14px -6px color-mix(in srgb, var(--card-b) 25%, transparent);
-  transition: transform .25s cubic-bezier(.2, .8, .2, 1), box-shadow .25s ease, border-color .25s ease;
-}
-
-/* Accent bar on the left edge */
-.section-landing .landing-card::after {
-  content: '';
-  position: absolute;
-  left: 0; top: 14px; bottom: 14px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, var(--card-a), var(--card-b));
-  transition: opacity .25s ease;
-}
-
-/* Hover gradient layer (fades in – gradients cannot be transitioned directly) */
-.section-landing .landing-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
+  border: 0;
+  transform: none;
+  filter: none;
   background:
     radial-gradient(90% 120% at 100% 0%, rgba(255, 255, 255, .22) 0%, transparent 50%),
     linear-gradient(135deg, var(--card-a) 0%, var(--card-b) 55%, var(--card-c) 100%);
-  opacity: 0;
-  transition: opacity .3s ease;
+  box-shadow: 0 10px 24px -14px var(--card-b) !important;
+  border-color: transparent !important;
+  transition: none;
 }
+.section-landing .landing-card:focus-visible { outline: 3px solid var(--card-line); outline-offset: 2px; }
 
-.section-landing .landing-card:hover,
-.section-landing .landing-card:focus-visible {
-  transform: translateY(-4px);
-  border-color: transparent;
-  box-shadow: 0 18px 34px -14px color-mix(in srgb, var(--card-b) 70%, transparent);
-  outline: none;
-}
-.section-landing .landing-card:hover::before,
-.section-landing .landing-card:focus-visible::before { opacity: 1; }
-.section-landing .landing-card:hover::after,
-.section-landing .landing-card:focus-visible::after { opacity: 0; }
-.section-landing .landing-card:active { transform: translateY(-1px); }
-
-/* Icon chip */
-.section-landing .landing-card-icon {
-  background: linear-gradient(135deg, var(--card-a), var(--card-b));
-  color: #ffffff;
-  border: 0;
-  box-shadow: 0 6px 14px -6px var(--card-b);
-  transition: background .3s ease, transform .3s ease;
-}
+.section-landing .landing-card-icon,
 .section-landing .landing-card:hover .landing-card-icon {
   background: rgba(255, 255, 255, .2);
+  color: #ffffff;
+  border: 0;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .35);
-  transform: scale(1.06) rotate(-4deg);
+  transform: none;
 }
 
-/* Text: dark on tint, white on gradient */
-.section-landing .landing-card-title,
-.section-landing .landing-card-desc,
-.section-landing .landing-card-foot,
-.section-landing .landing-card-badge { transition: color .25s ease, background .25s ease, border-color .25s ease; }
-.section-landing .landing-card-title { color: #0f172a; }
-.section-landing .landing-card-desc { color: #475569; }
-.section-landing .landing-card-foot { color: var(--card-b); border-top-color: color-mix(in srgb, var(--card-a) 22%, transparent); }
-.section-landing .landing-card-badge { background: #ffffff; color: var(--card-b); border-color: var(--card-line); }
-
-.section-landing .landing-card:hover .landing-card-title { color: #ffffff; }
-.section-landing .landing-card:hover .landing-card-desc { color: rgba(255, 255, 255, .85); }
-.section-landing .landing-card:hover .landing-card-foot { color: #ffffff; border-top-color: rgba(255, 255, 255, .25); }
-.section-landing .landing-card:hover .landing-card-badge { background: rgba(255, 255, 255, .18); color: #ffffff; border-color: rgba(255, 255, 255, .35); }
-.section-landing .landing-card:hover .card-arrow { transform: translateX(4px); }
+.section-landing .landing-card-title { color: #ffffff; }
+.section-landing .landing-card-desc { color: rgba(255, 255, 255, .85); }
+.section-landing .landing-card-foot { color: #ffffff; border-top-color: rgba(255, 255, 255, .25); }
+.section-landing .landing-card-badge { background: rgba(255, 255, 255, .18); color: #ffffff; border-color: rgba(255, 255, 255, .35); }
+.section-landing .landing-card .card-arrow,
+.section-landing .landing-card:hover .card-arrow { transform: none; }
 
 /* Section header icon follows the section shade */
 .section-landing .crud-header-icon--solid { background: linear-gradient(135deg, var(--card-a), var(--card-b)) !important; border: 0 !important; }
 .section-landing .section-count { color: var(--card-b); background: var(--card-tint); border-color: var(--card-line); }
-
-@media (prefers-reduced-motion: reduce) {
-  .section-landing .landing-card,
-  .section-landing .landing-card::before,
-  .section-landing .landing-card-icon { transition: none; }
-  .section-landing .landing-card:hover { transform: none; }
-  .section-landing .landing-card:hover .landing-card-icon { transform: none; }
-}
