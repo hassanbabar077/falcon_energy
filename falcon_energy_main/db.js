@@ -796,12 +796,18 @@ export async function writeState(pool, state) {
     }
   }
 
+  const savedTables = [];
+  const ignoredTables = [];
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
     for (const [entity, value] of Object.entries(state)) {
-      if (!TABLE_SCHEMAS[entity]) continue;
+      if (!TABLE_SCHEMAS[entity]) {
+        if (Array.isArray(value) ? value.length > 0 : value) ignoredTables.push(entity);
+        continue;
+      }
+      savedTables.push(entity);
 
       await connection.query(`DELETE FROM \`${entity}\``);
 
@@ -826,6 +832,8 @@ export async function writeState(pool, state) {
   } finally {
     connection.release();
   }
+  if (ignoredTables.length) console.warn('[writeState] Ignored unknown tables:', ignoredTables.join(', '));
+  return { savedTables, ignoredTables };
 }
 
 export async function verifyUser(pool, username, password) {

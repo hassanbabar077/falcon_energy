@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 const STORAGE_KEY = 'NOOR_TRANSPORT_DB_V14';
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 const AUTH_TOKEN_KEY = 'noorTransport.apiToken';
+// Tables added after the first API release; used to detect an outdated server
+const NEWER_TABLES = ['suppliers'];
 
 // ── Shared helpers ───────────────────────────────────────────────
 export const normText = (v) => String(v ?? '').trim().toLowerCase();
@@ -242,6 +244,15 @@ class DatabaseService {
           const errMessage = result.error || result.message || `Server error (${response.status})`;
           console.error('[Database Save Failed]:', errMessage);
           throw new Error(errMessage);
+        }
+
+        // Guard against an outdated API that silently drops tables it does not know
+        const hasRows = (t) => Array.isArray(this.data[t]) && this.data[t].length > 0;
+        const dropped = Array.isArray(result.ignoredTables)
+          ? result.ignoredTables
+          : (result.savedTables ? [] : NEWER_TABLES.filter(hasRows)); // old servers do not report savedTables
+        if (dropped.length) {
+          throw new Error(`The server did not store: ${dropped.join(', ')}. The API is running an older version - upload the latest falcon_energy_main (db.js, index.js) and restart the Node app.`);
         }
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));

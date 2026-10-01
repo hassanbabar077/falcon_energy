@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import { createPool, ensureSeedState, executeWithRetry, initializeDatabase, readState, verifyUser, writeState } from './db.js';
+import { TABLE_SCHEMAS, createPool, ensureSeedState, executeWithRetry, initializeDatabase, readState, verifyUser, writeState } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, './.env'), override: true });
@@ -36,7 +36,7 @@ const authenticate = (req, res, next) => {
 app.get('/api/health', async (_req, res) => {
   try {
     await executeWithRetry(() => pool.query('SELECT 1'));
-    res.json({ status: 'ok', success: true });
+    res.json({ status: 'ok', success: true, tables: Object.keys(TABLE_SCHEMAS) });
   } catch (error) {
     console.error('[Health Check Failed]:', error);
     res.status(500).json({ status: 'error', success: false, message: error.message, code: error.code });
@@ -70,9 +70,9 @@ app.put('/api/state', authenticate, async (req, res) => {
     if (!req.body?.state || typeof req.body.state !== 'object') {
       return res.status(400).json({ success: false, error: 'A valid state object is required.' });
     }
-    await executeWithRetry(() => writeState(pool, req.body.state));
+    const { savedTables, ignoredTables } = await executeWithRetry(() => writeState(pool, req.body.state));
     console.log(`[Database Write Confirmed] State successfully persisted to MySQL.`);
-    res.json({ success: true, message: 'Database state updated successfully.' });
+    res.json({ success: true, message: 'Database state updated successfully.', savedTables, ignoredTables });
   } catch (error) {
     console.error('[PUT /api/state Error]:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to persist state in database.' });
