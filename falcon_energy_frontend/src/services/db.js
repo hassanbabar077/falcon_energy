@@ -5,8 +5,11 @@ import bcrypt from 'bcryptjs';
 const STORAGE_KEY = 'NOOR_TRANSPORT_DB_V14';
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 const AUTH_TOKEN_KEY = 'noorTransport.apiToken';
-// Tables added after the first API release; used to detect an outdated server
+// Tables added after the first API release. An older API on the server does not
+// know them and would drop them, so their records are carried inside
+// `lookup_tables` (a table every API version stores) until the server is updated.
 const NEWER_TABLES = ['suppliers'];
+const PACKED_CATEGORY = '__packed_table_record__';
 
 // ── Shared helpers ───────────────────────────────────────────────
 export const normText = (v) => String(v ?? '').trim().toLowerCase();
@@ -143,6 +146,7 @@ class DatabaseService {
     this.ready = null;
     this.listeners = new Set();
     this.inTransaction = false;
+    this.serverTables = null; // Set of tables the API can store (null = unknown)
   }
 
   subscribe(listener) {
@@ -170,11 +174,12 @@ class DatabaseService {
     if (this.ready) return this.ready;
     this.ready = (async () => {
       try {
+        await this.detectServerTables();
         const response = await fetch(`${API_BASE_URL}/state`, { headers: { Authorization: `Bearer ${this.token}` } });
         if (!response.ok) throw new Error('Could not load shared data');
         const payload = await response.json();
         if (payload.state) {
-          this.data = payload.state;
+          this.data = this._unpackState(payload.state);
           localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
           this.notify('hydrate');
         }
@@ -183,6 +188,51 @@ class DatabaseService {
       }
     })();
     return this.ready;
+  }
+
+  // Ask the API which tables it can store (newer servers list them in /health)
+  async detectServerTables() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/health`);
+      const result = await response.json();
+      this.serverTables = new Set(Array.isArray(result.tables) ? result.tables : []);
+    } catch {
+      this.serverTables = null;
+    }
+    return this.serverTables;
+  }
+
+  _serverStores(table) {
+    return Boolean(this.serverTables && this.serverTables.has(table));
+  }
+
+  // Restore records that were carried inside lookup_tables back to their own table
+  _unpackState(state) {
+    const lookups = Array.isArray(state.lookup_tables) ? state.lookup_tables : [];
+    const packed = lookups.filter(l => l && l.category === PACKED_CATEGORY && l.table && l.record);
+    state.lookup_tables = lookups.filter(l => !(l && l.category === PACKED_CATEGORY));
+    NEWER_TABLES.forEach(table => {
+      const current = Array.isArray(state[table]) ? state[table] : [];
+      const ids = new Set(current.map(r => r.id));
+      const carried = packed.filter(p => p.table === table).map(p => p.record).filter(r => !ids.has(r.id));
+      state[table] = [...current, ...carried];
+    });
+    return state;
+  }
+
+  // State sent to the API: newer tables the server cannot store travel inside lookup_tables
+  _payloadForServer() {
+    const payload = { ...this.data };
+    const packedRows = [];
+    NEWER_TABLES.forEach(table => {
+      if (this._serverStores(table)) return;
+      (this.data[table] || []).forEach(record => {
+        packedRows.push({ id: `${PACKED_CATEGORY}:${table}:${record.id}`, category: PACKED_CATEGORY, table, options: [], record });
+      });
+      delete payload[table];
+    });
+    if (packedRows.length) payload.lookup_tables = [...(this.data.lookup_tables || []), ...packedRows];
+    return payload;
   }
 
   async authenticateWithApi(username, password) {
@@ -231,10 +281,12 @@ class DatabaseService {
   async saveData() {
     try {
       if (this.token) {
+        if (this.serverTables === null) await this.detectServerTables();
+        const payload = this._payloadForServer();
         const response = await fetch(`${API_BASE_URL}/state`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
-          body: JSON.stringify({ state: this.data })
+          body: JSON.stringify({ state: payload })
         });
 
         let result = {};
@@ -246,12 +298,13 @@ class DatabaseService {
           throw new Error(errMessage);
         }
 
-        // Guard against an outdated API that silently drops tables it does not know
-        const hasRows = (t) => Array.isArray(this.data[t]) && this.data[t].length > 0;
+        // Guard: a table we sent directly must not be dropped by the API
+        const sentDirect = (t) => Array.isArray(payload[t]) && payload[t].length > 0;
         const dropped = Array.isArray(result.ignoredTables)
           ? result.ignoredTables
-          : (result.savedTables ? [] : NEWER_TABLES.filter(hasRows)); // old servers do not report savedTables
+          : (result.savedTables ? [] : NEWER_TABLES.filter(sentDirect)); // old servers do not report savedTables
         if (dropped.length) {
+          this.serverTables = null; // re-detect on the next save
           throw new Error(`The server did not store: ${dropped.join(', ')}. The API is running an older version - upload the latest falcon_energy_main (db.js, index.js) and restart the Node app.`);
         }
       }
