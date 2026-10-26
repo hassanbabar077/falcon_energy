@@ -9,13 +9,13 @@ const CATEGORY_LABELS = {
   'Vendors': 'Vendors & Suppliers of Parts / Oil / Tyres',
   'Workshops': 'Workshops (Maintenance)',
   'Fuel Pumps': 'Fuel Pumps',
-  'Drivers': 'Drivers (Trip Advance / Settlement)',
-  'Vehicles': 'Vehicles (Trip Advance / Settlement)',
+  'Drivers': 'Drivers (Advance / Settlement)',
+  'Vehicles': 'Vehicles (Advance / Settlement)',
   'Personal Expenses': 'Personal Expenses & Misc'
 };
 
 const PAYMENT_TYPES = [
-  { id: 'Advance', label: 'Trip Advance', hint: 'Advance for the running trip' },
+  { id: 'Advance', label: 'Advance', hint: 'Pay against a running trip, or as opening balance before a trip is created' },
   { id: 'Settlement', label: 'Final Due Settlement', hint: 'Pay the final due of a delivered trip' }
 ];
 
@@ -78,6 +78,13 @@ export function PaymentEntry() {
   const tripForVoucher = paymentType === 'Advance' ? activeTrip : paymentType === 'Settlement' ? dbService._findTrip(settlementTripId) : null;
   const tripSettlement = useMemo(() => (tripForVoucher ? dbService.getTripSettlement(tripForVoucher.id) : null), [tripForVoucher, recentVouchers]);
 
+  const standingAdvance = useMemo(() => {
+    if (!isTripParty || !selectedParty) return 0;
+    return partyCategory === 'Vehicles'
+      ? dbService.getVehicleAdvanceBalance(selectedParty)
+      : dbService.getDriverAdvanceBalance(selectedParty);
+  }, [partyCategory, selectedParty, isTripParty, recentVouchers]);
+
   const partySummary = useMemo(() => (
     !isTripParty && selectedParty
       ? dbService.getPartyPayableSummary(partyCategory, selectedParty)
@@ -110,11 +117,11 @@ export function PaymentEntry() {
     if (!selectedParty) return setToast({ type: 'error', message: 'Please select the party to pay.' });
     if (!selectedBank) return setToast({ type: 'error', message: 'Please select a bank account.' });
     if (amt > availableBalance) return setToast({ type: 'error', message: `Insufficient bank balance. Available: ${pkr(availableBalance)}` });
-    if (paymentType === 'Advance' && !activeTrip) return setToast({ type: 'error', message: `${selectedParty} has no running trip. Create the trip first, then pay the advance.` });
     if (paymentType === 'Settlement' && !settlementTripId) return setToast({ type: 'error', message: 'No trip with an outstanding final due is selected.' });
 
     try {
       setIsSubmitting(true);
+      // Advance with a running trip → trip advance; without a trip → opening/standing advance
       const voucher = await dbService.processPaymentVoucher({
         bank_id: selectedBankId,
         party_category: partyCategory,
@@ -128,7 +135,10 @@ export function PaymentEntry() {
         description,
         remarks
       });
-      setToast({ type: 'success', message: `Voucher ${voucher.voucher_no} posted: ${voucher.description}` });
+      const openingNote = paymentType === 'Advance' && !tripForVoucher
+        ? ' (opening balance for the next trip)'
+        : '';
+      setToast({ type: 'success', message: `Voucher ${voucher.voucher_no} posted: ${voucher.description}${openingNote}` });
       setVoucherToPrint(voucher);
       resetForm();
       loadInitialData();
@@ -216,7 +226,7 @@ export function PaymentEntry() {
             {/* Live context panel */}
             {paymentType === 'Advance' ? (
               <div className="context-card">
-                <div className="context-card-head"><Truck size={15} /> Running Trip</div>
+                <div className="context-card-head"><Truck size={15} /> {activeTrip ? 'Running Trip' : 'Opening / Pre-trip Advance'}</div>
                 {activeTrip ? (
                   <>
                     <div className="context-row"><span>Trip</span><strong>{activeTrip.id}</strong></div>
@@ -227,7 +237,13 @@ export function PaymentEntry() {
                     <div className="context-row context-row--total"><span>Total advance available</span><strong>{pkr(tripSettlement?.totalAdvance)}</strong></div>
                   </>
                 ) : (
-                  <div className="context-empty">No running trip for {selectedParty || 'this party'}. An advance can only be paid against a trip that has not been delivered yet.</div>
+                  <>
+                    <div className="context-row"><span>Standing opening advance</span><strong>{pkr(standingAdvance)}</strong></div>
+                    <div className="context-row context-row--total"><span>After this voucher</span><strong>{pkr(standingAdvance + toNum(payAmount))}</strong></div>
+                    <p className="context-empty" style={{ marginTop: '10px', border: 'none', padding: 0 }}>
+                      No running trip for {selectedParty || 'this party'}. This payment will be stored as opening advance and applied automatically when the next trip is created.
+                    </p>
+                  </>
                 )}
               </div>
             ) : paymentType === 'Settlement' ? (

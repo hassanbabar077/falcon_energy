@@ -168,14 +168,42 @@ class DatabaseService {
     return Boolean(this.token);
   }
 
+  getTokenExpiryMs() {
+    if (!this.token) return null;
+    try {
+      const payload = JSON.parse(atob(this.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+      return payload.exp ? payload.exp * 1000 : null;
+    } catch {
+      return null;
+    }
+  }
+
+  isTokenExpired() {
+    const exp = this.getTokenExpiryMs();
+    return exp != null && Date.now() >= exp;
+  }
+
+  _handleAuthFailure() {
+    this.clearApiSession();
+    this.notify('auth_expired');
+  }
+
   // Keeps every existing page synchronous after startup while MySQL becomes the
   // shared source of truth. The local copy is only an offline migration/cache.
   async hydrate() {
     if (this.ready) return this.ready;
     this.ready = (async () => {
       try {
+        if (this.token && this.isTokenExpired()) {
+          this._handleAuthFailure();
+          throw new Error('Session expired');
+        }
         await this.detectServerTables();
         const response = await fetch(`${API_BASE_URL}/state`, { headers: { Authorization: `Bearer ${this.token}` } });
+        if (response.status === 401) {
+          this._handleAuthFailure();
+          throw new Error('Session expired');
+        }
         if (!response.ok) throw new Error('Could not load shared data');
         const payload = await response.json();
         if (payload.state) {
@@ -281,6 +309,10 @@ class DatabaseService {
   async saveData() {
     try {
       if (this.token) {
+        if (this.isTokenExpired()) {
+          this._handleAuthFailure();
+          throw new Error('Your session has expired. Please log in again. Changes were not saved.');
+        }
         if (this.serverTables === null) await this.detectServerTables();
         const payload = this._payloadForServer();
         const response = await fetch(`${API_BASE_URL}/state`, {
@@ -288,6 +320,11 @@ class DatabaseService {
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` },
           body: JSON.stringify({ state: payload })
         });
+
+        if (response.status === 401) {
+          this._handleAuthFailure();
+          throw new Error('Your session has expired. Please log in again. Changes were not saved.');
+        }
 
         let result = {};
         try { result = await response.json(); } catch (e) {}
@@ -1116,12 +1153,50 @@ class DatabaseService {
     );
   }
 
-  // Carry-forward advance balance of a vehicle (surplus from its previous trip)
+  _findDriver(driver) {
+    if (!driver) return null;
+    const n = normText(driver);
+    return (this.data.drivers || []).find(d => normText(d.name) === n || normText(d.code) === n || normText(d.id) === n) || null;
+  }
+
+  // Carry-forward + pre-trip standing advance on a vehicle
   getVehicleAdvanceBalance(vehicle) {
     return round2(this._findVehicle(vehicle)?.advance_balance);
   }
 
-  // Take the vehicle's carry-forward balance for a new trip (memory only - use inside a transaction)
+  getDriverAdvanceBalance(driver) {
+    return round2(this._findDriver(driver)?.advance_balance);
+  }
+
+  // Opening advance that will attach to the next trip (vehicle C/F + driver standing)
+  getOpeningAdvanceForTrip(vehicle, driver = '') {
+    return round2(this.getVehicleAdvanceBalance(vehicle) + this.getDriverAdvanceBalance(driver));
+  }
+
+  // Credit standing advance paid before a trip exists (memory only - call inside a transaction)
+  creditStandingAdvance(partyCategory, partyName, amount) {
+    const payAmount = round2(amount);
+    if (payAmount <= 0) return 0;
+    if (partyCategory === 'Vehicles') {
+      const veh = this._findVehicle(partyName);
+      if (!veh) throw new Error(`Vehicle "${partyName}" was not found in master data.`);
+      const before = round2(veh.advance_balance);
+      veh.advance_balance = round2(before + payAmount);
+      veh.updatedAt = new Date().toISOString();
+      return { before, after: veh.advance_balance };
+    }
+    if (partyCategory === 'Drivers') {
+      const drv = this._findDriver(partyName);
+      if (!drv) throw new Error(`Driver "${partyName}" was not found in master data.`);
+      const before = round2(drv.advance_balance);
+      drv.advance_balance = round2(before + payAmount);
+      drv.updatedAt = new Date().toISOString();
+      return { before, after: drv.advance_balance };
+    }
+    throw new Error('Standing advances are only for vehicles and drivers.');
+  }
+
+  // Take the vehicle's carry-forward / standing balance for a new trip (memory only)
   takeVehicleAdvanceBalance(vehicle) {
     const veh = this._findVehicle(vehicle);
     if (!veh) return 0;
@@ -1129,6 +1204,51 @@ class DatabaseService {
     veh.advance_balance = 0;
     veh.updatedAt = new Date().toISOString();
     return amount;
+  }
+
+  takeDriverAdvanceBalance(driver) {
+    const drv = this._findDriver(driver);
+    if (!drv) return 0;
+    const amount = round2(drv.advance_balance);
+    drv.advance_balance = 0;
+    drv.updatedAt = new Date().toISOString();
+    return amount;
+  }
+
+  // Move standing (pre-trip) advances onto a new trip as opening balance.
+  // Links unassigned Advance vouchers to the trip (marked is_opening_advance so
+  // they are not double-counted with previous_advance_balance in settlement).
+  consumeStandingAdvancesForTrip(vehicle, driver, tripId) {
+    const fromVehicle = this.takeVehicleAdvanceBalance(vehicle);
+    const fromDriver = this.takeDriverAdvanceBalance(driver);
+    const total = round2(fromVehicle + fromDriver);
+    const now = new Date().toISOString();
+    const vehN = normText(vehicle);
+    const drvN = normText(driver);
+
+    (this.data.payments || []).forEach(p => {
+      if (p.payment_type !== 'Advance') return;
+      const noTrip = !p.trip_id || p.trip_id === '-' || String(p.trip_id).trim() === '';
+      if (!noTrip) return;
+
+      const party = normText(p.party_name);
+      const matchVehicle = vehN && (
+        (p.party_category === 'Vehicles' && party === vehN) ||
+        normText(p.vehicle) === vehN
+      );
+      const matchDriver = drvN && (
+        (p.party_category === 'Drivers' && party === drvN) ||
+        normText(p.driver) === drvN
+      );
+
+      if (matchVehicle || matchDriver) {
+        p.trip_id = tripId;
+        p.is_opening_advance = true;
+        p.updatedAt = now;
+      }
+    });
+
+    return total;
   }
 
   getVehicleActiveTrip(vehicle) {
@@ -1147,7 +1267,12 @@ class DatabaseService {
 
   getTripAdvances(tripId) {
     const n = normText(tripId);
-    return (this.data.payments || []).filter(p => p.payment_type === 'Advance' && normText(p.trip_id) === n);
+    // Opening/pre-trip advances are already in previous_advance_balance — exclude them here
+    return (this.data.payments || []).filter(p =>
+      p.payment_type === 'Advance' &&
+      normText(p.trip_id) === n &&
+      !p.is_opening_advance
+    );
   }
 
   getTripSettlementPayments(tripId) {
@@ -1278,7 +1403,10 @@ class DatabaseService {
     const ref = c.instrument ? `Ref ${c.instrument}` : '';
     switch (type) {
       case 'advance':
-        return clean([`Trip advance for ${t?.id || ''}`, t?.vehicle, driver, this._tripRoute(t), via, ref]);
+        if (!t?.id) {
+          return clean([`Opening / pre-trip advance for ${c.party}`, CATEGORY_NARRATION[c.category] || c.category, via, ref]);
+        }
+        return clean([`Trip advance for ${t.id}`, t.vehicle, driver, this._tripRoute(t), via, ref]);
       case 'settlement':
         return clean([`Final due settlement for ${t?.id || ''}`, t?.vehicle, driver, via, ref]);
       case 'receipt':
@@ -1692,7 +1820,7 @@ class DatabaseService {
 
   // Payment Voucher (payable) from a bank account. Types:
   //  'Payment'    - normal dues to vendors, workshops, fuel pumps, drivers, vehicles, personal
-  //  'Advance'    - advance for a vehicle/driver's running trip (consumed in trip settlement)
+  //  'Advance'    - trip advance (with trip) OR opening/pre-trip advance (no trip → standing balance)
   //  'Settlement' - pays the FINAL DUE of a delivered trip
   async processPaymentVoucher(voucherData) {
     return this.transaction(() => this._processPaymentVoucher(voucherData));
@@ -1718,25 +1846,36 @@ class DatabaseService {
     let trip = null;
     let outstandingBefore = 0;
     let balanceAfter = 0;
+    let isOpeningAdvance = false;
 
     if (payment_type === 'Advance' || payment_type === 'Settlement') {
       if (!['Vehicles', 'Drivers'].includes(party_category)) throw new Error('Trip advances and settlements are only for vehicles and drivers.');
-      trip = this._findTrip(trip_id);
-      if (!trip) throw new Error('Please select the trip for this voucher.');
-      const assigned = party_category === 'Vehicles' ? trip.vehicle : trip.driver;
-      if (normText(assigned) !== normText(party_name)) throw new Error(`Trip ${trip.id} is not assigned to ${party_name}.`);
-      const s = this.getTripSettlement(trip.id);
 
-      if (payment_type === 'Advance') {
-        if (trip.unloading_date) throw new Error(`Trip ${trip.id} is already delivered. Use Final Due Settlement instead.`);
-        outstandingBefore = s.totalAdvance;              // total advance before this voucher
-        balanceAfter = round2(s.totalAdvance + payAmount); // total advance after this voucher
+      if (payment_type === 'Advance' && !trip_id) {
+        // Pre-trip / opening advance: no running trip required — sits on standing balance
+        // until the next trip is created for this vehicle/driver.
+        const credited = this.creditStandingAdvance(party_category, party_name, payAmount);
+        outstandingBefore = credited.before;
+        balanceAfter = credited.after;
+        isOpeningAdvance = false; // becomes opening when a trip is later created
       } else {
-        if (payAmount > s.outstandingDue + 0.001) {
-          throw new Error(`Amount is more than the outstanding final due of ${trip.id} (PKR ${s.outstandingDue.toLocaleString()}).`);
+        trip = this._findTrip(trip_id);
+        if (!trip) throw new Error('Please select the trip for this voucher.');
+        const assigned = party_category === 'Vehicles' ? trip.vehicle : trip.driver;
+        if (normText(assigned) !== normText(party_name)) throw new Error(`Trip ${trip.id} is not assigned to ${party_name}.`);
+        const s = this.getTripSettlement(trip.id);
+
+        if (payment_type === 'Advance') {
+          if (trip.unloading_date) throw new Error(`Trip ${trip.id} is already delivered. Use Final Due Settlement instead.`);
+          outstandingBefore = s.totalAdvance;
+          balanceAfter = round2(s.totalAdvance + payAmount);
+        } else {
+          if (payAmount > s.outstandingDue + 0.001) {
+            throw new Error(`Amount is more than the outstanding final due of ${trip.id} (PKR ${s.outstandingDue.toLocaleString()}).`);
+          }
+          outstandingBefore = s.outstandingDue;
+          balanceAfter = round2(s.outstandingDue - payAmount);
         }
-        outstandingBefore = s.outstandingDue;
-        balanceAfter = round2(s.outstandingDue - payAmount);
       }
     } else {
       const summary = this.getPartyPayableSummary(party_category, party_name);
@@ -1775,7 +1914,8 @@ class DatabaseService {
       cheque_no: instrument_no || '',
       description: narration,
       remarks: remarks || '',
-      status: 'Posted'
+      status: 'Posted',
+      is_opening_advance: isOpeningAdvance
     };
     await this.insertRecord('payments', paymentRecord);
 

@@ -93,8 +93,16 @@ export default function App() {
         if (elapsed > SESSION_TIMEOUT_MS) {
           localStorage.removeItem(USER_SESSION_KEY);
           localStorage.removeItem(SESSION_TIMESTAMP_KEY);
+          dbService.clearApiSession();
           return null;
         }
+      }
+      // Stale JWT left behind after a previous idle logout — force re-login
+      if (stored && dbService.hasApiSession() && dbService.isTokenExpired()) {
+        localStorage.removeItem(USER_SESSION_KEY);
+        localStorage.removeItem(SESSION_TIMESTAMP_KEY);
+        dbService.clearApiSession();
+        return null;
       }
       return stored ? JSON.parse(stored) : null;
     } catch (e) {
@@ -104,6 +112,14 @@ export default function App() {
 
   const handleRefresh = () => setRefreshKey(prev => prev + 1);
 
+  const forceSessionExpired = (message) => {
+    setCurrentUser(null);
+    dbService.clearApiSession();
+    localStorage.removeItem(USER_SESSION_KEY);
+    localStorage.removeItem(SESSION_TIMESTAMP_KEY);
+    alert(message || 'Your session has expired. Please log in again.');
+  };
+
   useEffect(() => {
     if (dbService.hasApiSession()) dbService.hydrate().finally(() => setDatabaseReady(true));
 
@@ -111,11 +127,14 @@ export default function App() {
     // Local saves are refreshed by the pages themselves so open dialogs survive.
     const unsubscribe = dbService.subscribe((_data, reason) => {
       if (reason === 'hydrate') setRefreshKey(prev => prev + 1);
+      if (reason === 'auth_expired') {
+        forceSessionExpired('Your session has expired. Please log in again. Changes were not saved to the server.');
+      }
     });
     return () => unsubscribe();
   }, []);
 
-  // Session Inactivity Monitoring & Auto-Logout
+  // Session Inactivity + JWT expiry monitoring
   useEffect(() => {
     if (!currentUser) return;
 
@@ -133,16 +152,17 @@ export default function App() {
 
     activityEvents.forEach(evt => window.addEventListener(evt, handleUserActivity));
 
-    // Interval check every 1 minute to auto logout if idle for 2+ hours
+    // Interval check every 1 minute: idle timeout OR expired API token
     const timer = setInterval(() => {
+      if (dbService.hasApiSession() && dbService.isTokenExpired()) {
+        forceSessionExpired('Your login token has expired. Please log in again so your work is saved to the server.');
+        return;
+      }
       const lastActivity = localStorage.getItem(SESSION_TIMESTAMP_KEY);
       if (lastActivity) {
         const elapsed = Date.now() - parseInt(lastActivity, 10);
         if (elapsed > SESSION_TIMEOUT_MS) {
-          setCurrentUser(null);
-          localStorage.removeItem(USER_SESSION_KEY);
-          localStorage.removeItem(SESSION_TIMESTAMP_KEY);
-          alert('Your session has expired due to 2 hours of inactivity. Please log in again.');
+          forceSessionExpired('Your session has expired due to 2 hours of inactivity. Please log in again.');
         }
       }
     }, 60000);

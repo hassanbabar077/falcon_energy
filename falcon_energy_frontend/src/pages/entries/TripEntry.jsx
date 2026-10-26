@@ -47,13 +47,19 @@ export function TripEntry() {
 
     const fuelBal = dbService.getVehicleCurrentFuel(val);
     setVehicleFuel(fuelBal);
-    setCarryAdvance(dbService.getVehicleAdvanceBalance(val));
+    const nextDriver = autoDriver || formData.driver;
+    setCarryAdvance(dbService.getOpeningAdvanceForTrip(val, nextDriver));
 
     setFormData(prev => ({
       ...prev,
       vehicle: val,
       driver: autoDriver || prev.driver
     }));
+  };
+
+  const handleDriverChange = (val) => {
+    handleChange('driver', val);
+    setCarryAdvance(dbService.getOpeningAdvanceForTrip(formData.vehicle, val));
   };
 
   const handleSubmit = async (e) => {
@@ -101,15 +107,24 @@ export function TripEntry() {
     };
 
     try {
-      // Save trip + consume vehicle opening fuel (link unassigned fuel entries) in one atomic save
-      // Save trip + take the vehicle's carry-forward advance + consume opening fuel in one atomic save
+      // Save trip + take standing/pre-trip advances + consume opening fuel in one atomic save
       await dbService.transaction(async () => {
-        tripRecord.previous_advance_balance = dbService.takeVehicleAdvanceBalance(formData.vehicle);
+        tripRecord.previous_advance_balance = dbService.consumeStandingAdvancesForTrip(
+          formData.vehicle,
+          formData.driver,
+          nextTripId
+        );
         await dbService.insertRecord('trips', tripRecord);
         dbService.consumeVehicleOpeningFuel(formData.vehicle, nextTripId);
       });
 
-      setToast({ message: `Trip ${nextTripId} registered with ${currentFuel.liters.toFixed(1)} L opening fuel!`, type: 'success' });
+      const advNote = tripRecord.previous_advance_balance > 0
+        ? ` · Opening advance PKR ${tripRecord.previous_advance_balance.toLocaleString()}`
+        : '';
+      setToast({
+        message: `Trip ${nextTripId} registered with ${currentFuel.liters.toFixed(1)} L opening fuel${advNote}!`,
+        type: 'success'
+      });
       setFormData({ ...defaultForm });
       setVehicleFuel({ liters: 0, cost: 0, rate: 0 });
       setCarryAdvance(0);
@@ -130,7 +145,7 @@ export function TripEntry() {
           </div>
           <div>
             <h2 className="crud-header-title">Trip Loading Entry</h2>
-            <p className="crud-header-sub">Register initial dispatch loading information & inherit opening fuel for LPG tankers.</p>
+            <p className="crud-header-sub">Register dispatch loading & inherit opening fuel and pre-trip advances for LPG tankers.</p>
           </div>
         </div>
         <div className="crud-count-badge" style={{ fontSize: '13px', fontWeight: '800', color: '#0d9488', borderColor: '#ccfbf1', background: '#f0fdfa' }}>
@@ -167,7 +182,7 @@ export function TripEntry() {
               {formData.vehicle && carryAdvance > 0 && (
                 <div className="info-chip info-chip--blue">
                   <Wallet size={14} />
-                  <span>Carry-forward advance: PKR {carryAdvance.toLocaleString()}</span>
+                  <span>Opening advance (pre-trip + C/F): PKR {carryAdvance.toLocaleString()}</span>
                 </div>
               )}
             </div>
@@ -178,7 +193,7 @@ export function TripEntry() {
               </label>
               <select
                 value={formData.driver}
-                onChange={e => handleChange('driver', e.target.value)}
+                onChange={e => handleDriverChange(e.target.value)}
                 className="crud-form-select"
               >
                 <option value="">Select Driver</option>
