@@ -15,8 +15,18 @@ const CATEGORY_LABELS = {
 };
 
 const PAYMENT_TYPES = [
-  { id: 'Advance', label: 'Advance', hint: 'Pay against a running trip, or as opening balance before a trip is created' },
-  { id: 'Settlement', label: 'Final Due Settlement', hint: 'Pay the final due of a delivered trip' }
+  {
+    id: 'Advance',
+    label: 'Advance',
+    tone: 'advance',
+    hint: 'Pay against a running trip, or as opening balance before a trip is created'
+  },
+  {
+    id: 'Settlement',
+    label: 'Final Due Settlement',
+    tone: 'settlement',
+    hint: 'Pay the final due of a delivered trip'
+  }
 ];
 
 export function PaymentEntry() {
@@ -200,12 +210,25 @@ export function PaymentEntry() {
               {isTripParty && (
                 <div className="crud-form-field">
                   <label className="crud-form-label">Voucher Type *</label>
-                  <div className="segmented">
+                  <div className="segmented segmented--voucher" role="group" aria-label="Voucher type">
                     {PAYMENT_TYPES.map(pt => (
-                      <button type="button" key={pt.id} className={paymentType === pt.id ? 'active' : ''} onClick={() => { setPaymentType(pt.id); setDescriptionEdited(false); }} title={pt.hint}>
+                      <button
+                        type="button"
+                        key={pt.id}
+                        className={`seg-${pt.tone}${paymentType === pt.id ? ' active' : ''}`}
+                        onClick={() => { setPaymentType(pt.id); setDescriptionEdited(false); }}
+                        title={pt.hint}
+                      >
                         {pt.label}
                       </button>
                     ))}
+                  </div>
+                  <div className={`voucher-type-hint voucher-type-hint--${paymentType === 'Settlement' ? 'settlement' : 'advance'}`}>
+                    {paymentType === 'Settlement'
+                      ? 'Amber · Pay the outstanding final due of a delivered trip.'
+                      : activeTrip
+                        ? 'Teal · Advance linked to the running trip.'
+                        : 'Teal · Opening / pre-trip advance (applied when the next trip is created).'}
                   </div>
                 </div>
               )}
@@ -223,10 +246,10 @@ export function PaymentEntry() {
               )}
             </div>
 
-            {/* Live context panel */}
+            {/* Live context panel — tinted by voucher type */}
             {paymentType === 'Advance' ? (
-              <div className="context-card">
-                <div className="context-card-head"><Truck size={15} /> {activeTrip ? 'Running Trip' : 'Opening / Pre-trip Advance'}</div>
+              <div className="context-card context-card--advance">
+                <div className="context-card-head"><Truck size={15} /> {activeTrip ? 'Running Trip · Advance' : 'Opening / Pre-trip Advance'}</div>
                 {activeTrip ? (
                   <>
                     <div className="context-row"><span>Trip</span><strong>{activeTrip.id}</strong></div>
@@ -247,8 +270,8 @@ export function PaymentEntry() {
                 )}
               </div>
             ) : paymentType === 'Settlement' ? (
-              <div className="context-card">
-                <div className="context-card-head"><ClipboardCheck size={15} /> Trip Settlement</div>
+              <div className="context-card context-card--settlement">
+                <div className="context-card-head"><ClipboardCheck size={15} /> Trip Settlement · Final Due</div>
                 {tripSettlement ? (
                   <>
                     <div className="context-row"><span>Total advance</span><strong>{pkr(tripSettlement.totalAdvance)}</strong></div>
@@ -260,7 +283,7 @@ export function PaymentEntry() {
                 ) : <div className="context-empty">Select a trip with a final due.</div>}
               </div>
             ) : (
-              <div className="context-card">
+              <div className="context-card context-card--ledger">
                 <div className="context-card-head"><Wallet size={15} /> Ledger Balance · {selectedParty || '—'}</div>
                 <div className="context-row"><span>Total billed / costs</span><strong>{pkr(partySummary.totalAccruedCost)}</strong></div>
                 <div className="context-row"><span>Total paid</span><strong>{pkr(partySummary.totalPaidAmount)}</strong></div>
@@ -308,8 +331,19 @@ export function PaymentEntry() {
           </div>
 
           <div className="form-actions">
-            <button type="submit" disabled={isSubmitting || !selectedParty || toNum(payAmount) <= 0} className="btn btn-teal btn-lg">
-              <CheckCircle size={18} /> {isSubmitting ? 'Posting…' : 'Generate & Post Voucher'}
+            <button
+              type="submit"
+              disabled={isSubmitting || !selectedParty || toNum(payAmount) <= 0}
+              className={`btn btn-lg ${paymentType === 'Settlement' ? 'btn-amber' : 'btn-teal'}`}
+            >
+              <CheckCircle size={18} />
+              {isSubmitting
+                ? 'Posting…'
+                : paymentType === 'Settlement'
+                  ? 'Post Settlement Voucher'
+                  : paymentType === 'Advance'
+                    ? 'Post Advance Voucher'
+                    : 'Generate & Post Voucher'}
             </button>
           </div>
         </form>
@@ -360,7 +394,7 @@ export function PaymentEntry() {
                 <tr key={v.id}>
                   <td className="crud-td-code">{v.voucher_no || v.id}</td>
                   <td>{v.payment_date || v.date}</td>
-                  <td><span className={`badge ${v.payment_type === 'Advance' ? 'badge-blue' : v.payment_type === 'Settlement' ? 'badge-amber' : 'badge-teal'}`}>{v.payment_type || 'Payment'}</span></td>
+                  <td><span className={`badge ${v.payment_type === 'Advance' ? 'badge-teal' : v.payment_type === 'Settlement' ? 'badge-amber' : 'badge-blue'}`}>{v.payment_type || 'Payment'}</span></td>
                   <td><strong>{v.party_name || v.paid_to}</strong><div className="cell-sub">{v.party_category || ''}</div></td>
                   <td className="cell-desc">{v.description || v.remarks || '-'}</td>
                   <td>{v.bank_account || v.bank_name || v.source_name || '-'}</td>

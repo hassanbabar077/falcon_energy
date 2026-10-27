@@ -6,9 +6,20 @@ import { escapeHTML as e, pkr, fmtDate, printHTML } from '../utils/print';
 export const VOUCHER_CSS = `
   .vch { font-family: 'Nunito', 'Segoe UI', sans-serif; color: #0f172a; font-size: 12px; line-height: 1.45; }
   .vch-head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0f766e; padding-bottom: 12px; margin-bottom: 14px; }
+  .vch--advance .vch-head { border-bottom-color: #0d9488; }
+  .vch--settlement .vch-head { border-bottom-color: #d97706; }
+  .vch--receipt .vch-head { border-bottom-color: #15803d; }
   .vch-company { font-size: 18px; font-weight: 900; letter-spacing: -.2px; }
   .vch-sub { font-size: 10.5px; color: #64748b; font-weight: 600; margin-top: 2px; }
   .vch-title { font-size: 11px; font-weight: 900; letter-spacing: 1.2px; color: #0f766e; text-transform: uppercase; }
+  .vch--advance .vch-title { color: #0d9488; }
+  .vch--settlement .vch-title { color: #b45309; }
+  .vch--receipt .vch-title { color: #15803d; }
+  .vch-type-pill { display: inline-block; margin-top: 6px; padding: 3px 10px; border-radius: 99px; font-size: 10px; font-weight: 800; letter-spacing: .4px; }
+  .vch--advance .vch-type-pill { background: #ccfbf1; color: #0f766e; }
+  .vch--settlement .vch-type-pill { background: #fef3c7; color: #b45309; }
+  .vch--receipt .vch-type-pill { background: #dcfce7; color: #15803d; }
+  .vch--payment .vch-type-pill { background: #dbeafe; color: #1d4ed8; }
   .vch-no { font-size: 18px; font-weight: 900; font-family: 'Consolas', monospace; text-align: right; }
   .vch-date { font-size: 11px; color: #475569; font-weight: 700; text-align: right; }
   .vch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
@@ -17,10 +28,14 @@ export const VOUCHER_CSS = `
   .vch-val { font-size: 13px; font-weight: 800; margin-top: 1px; }
   .vch-small { font-size: 11px; color: #475569; margin-top: 2px; }
   .vch-desc { border-left: 3px solid #0d9488; background: #f0fdfa; padding: 8px 12px; border-radius: 0 8px 8px 0; margin-bottom: 12px; font-weight: 700; }
+  .vch--settlement .vch-desc { border-left-color: #d97706; background: #fffbeb; }
+  .vch--receipt .vch-desc { border-left-color: #16a34a; background: #f0fdf4; }
   .vch-amounts { border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
   .vch-amounts div { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
   .vch-amounts div:last-child { border-bottom: 0; }
   .vch-amounts .main { background: #f0fdfa; font-size: 15px; font-weight: 900; color: #0f766e; }
+  .vch--settlement .vch-amounts .main { background: #fffbeb; color: #b45309; }
+  .vch--receipt .vch-amounts .main { background: #f0fdf4; color: #15803d; }
   .vch-amounts span:last-child { font-family: 'Consolas', monospace; font-weight: 800; }
   .vch-sign { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 44px; text-align: center; font-size: 10.5px; color: #475569; font-weight: 700; }
   .vch-sign div { border-top: 1px solid #94a3b8; padding-top: 4px; }
@@ -39,6 +54,16 @@ export function buildVoucherHTML(voucher, kind = 'payment') {
     : type === 'Settlement' ? 'Final Due Settlement Voucher'
     : 'Payment Voucher';
 
+  const toneClass = isReceipt ? 'vch--receipt'
+    : type === 'Advance' ? 'vch--advance'
+    : type === 'Settlement' ? 'vch--settlement'
+    : 'vch--payment';
+
+  const typePill = isReceipt ? 'Receipt'
+    : type === 'Advance' ? 'Advance'
+    : type === 'Settlement' ? 'Settlement'
+    : 'Payment';
+
   const balanceRows = isReceipt
     ? [['Customer receivable before', voucher.outstanding_before], ['Amount received', voucher.amount, true], ['Receivable remaining', voucher.balance_after]]
     : type === 'Advance'
@@ -53,12 +78,13 @@ export function buildVoucherHTML(voucher, kind = 'payment') {
   const ref = voucher.instrument_no || voucher.reference_number || voucher.cheque_no;
 
   return `
-    <div class="vch">
+    <div class="vch ${toneClass}">
       <div class="vch-head">
         <div>
           <div class="vch-company">${e(company.name)}</div>
           <div class="vch-sub">${e(company.address)} · ${e(company.contact)}</div>
           <div class="vch-title" style="margin-top:8px">${e(title)}</div>
+          <span class="vch-type-pill">${e(typePill)}</span>
         </div>
         <div>
           <div class="vch-no">${e(no)}</div>

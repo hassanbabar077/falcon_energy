@@ -1011,11 +1011,54 @@ html, body, #root { background: var(--c-bg); color: var(--c-text); }
 .segmented button {
   border: 0; background: transparent; padding: 7px 14px; border-radius: 10px;
   font: inherit; font-size: 12.5px; font-weight: 700; color: var(--c-text-2); cursor: pointer;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
 }
 .segmented button.active {
   background: var(--c-surface) !important;
   color: var(--c-accent-strong);
   box-shadow: var(--shadow-sm) !important;
+}
+
+/* Colored voucher-type segmented control (Advance vs Settlement) */
+.segmented--voucher { width: 100%; }
+.segmented--voucher button { flex: 1; min-width: 120px; text-align: center; padding: 9px 12px; }
+.segmented--voucher .seg-advance {
+  color: #0f766e;
+  background: rgba(13, 148, 136, .08);
+}
+.segmented--voucher .seg-advance:hover:not(.active) {
+  background: rgba(13, 148, 136, .16);
+}
+.segmented--voucher .seg-advance.active {
+  background: linear-gradient(145deg, #14b8a6, #0d9488) !important;
+  color: #fff !important;
+  box-shadow: 4px 4px 10px rgba(13, 148, 136, .35), -2px -2px 6px rgba(255, 255, 255, .4) !important;
+}
+.segmented--voucher .seg-settlement {
+  color: #b45309;
+  background: rgba(217, 119, 6, .1);
+}
+.segmented--voucher .seg-settlement:hover:not(.active) {
+  background: rgba(217, 119, 6, .18);
+}
+.segmented--voucher .seg-settlement.active {
+  background: linear-gradient(145deg, #f59e0b, #d97706) !important;
+  color: #fff !important;
+  box-shadow: 4px 4px 10px rgba(217, 119, 6, .35), -2px -2px 6px rgba(255, 255, 255, .4) !important;
+}
+.voucher-type-hint {
+  margin-top: 8px; font-size: 11.5px; font-weight: 700; line-height: 1.4;
+  padding: 7px 10px; border-radius: 10px;
+}
+.voucher-type-hint--advance {
+  color: #0f766e;
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-inset-sm);
+}
+.voucher-type-hint--settlement {
+  color: #b45309;
+  background: var(--c-warn-soft);
+  box-shadow: var(--shadow-inset-sm);
 }
 
 /* Context / summary panels */
@@ -1029,6 +1072,21 @@ html, body, #root { background: var(--c-bg); color: var(--c-text); }
   background: var(--c-accent-soft) !important;
   box-shadow: var(--shadow-inset-sm) !important;
 }
+.context-card--advance {
+  background: linear-gradient(180deg, #d9f5f1 0%, #e8eef2 100%) !important;
+  box-shadow: inset 3px 3px 8px rgba(13, 148, 136, .12), inset -3px -3px 8px rgba(255, 255, 255, .55) !important;
+}
+.context-card--advance .context-card-head { color: #0f766e; }
+.context-card--settlement {
+  background: linear-gradient(180deg, #fff1d6 0%, #e8eef2 100%) !important;
+  box-shadow: inset 3px 3px 8px rgba(217, 119, 6, .12), inset -3px -3px 8px rgba(255, 255, 255, .55) !important;
+}
+.context-card--settlement .context-card-head { color: #b45309; }
+.context-card--ledger {
+  background: linear-gradient(180deg, #dde9ff 0%, #e8eef2 100%) !important;
+  box-shadow: inset 3px 3px 8px rgba(37, 99, 235, .1), inset -3px -3px 8px rgba(255, 255, 255, .55) !important;
+}
+.context-card--ledger .context-card-head { color: #1d4ed8; }
 .context-card-head { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--c-muted); margin-bottom: 6px; }
 .context-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; padding: 4px 0; border-bottom: 1px dashed rgba(148, 163, 184, .35); }
 .context-row:last-child { border-bottom: 0; }

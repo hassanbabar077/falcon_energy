@@ -80,7 +80,7 @@ export function PaymentHistory() {
                 <tr key={`${v.kind}-${v.no}`}>
                   <td className="crud-td-code">{v.no}</td>
                   <td>{v.date}</td>
-                  <td><span className={`badge ${v.kind === 'receipt' ? 'badge-teal' : v.type === 'Advance' ? 'badge-blue' : v.type === 'Settlement' ? 'badge-amber' : 'badge-rose'}`}>{v.type}</span></td>
+                  <td><span className={`badge ${v.kind === 'receipt' ? 'badge-green' : v.type === 'Advance' ? 'badge-teal' : v.type === 'Settlement' ? 'badge-amber' : 'badge-blue'}`}>{v.type}</span></td>
                   <td><strong>{v.party}</strong><div className="cell-sub">{v.category}</div></td>
                   <td className="cell-desc">{v.description || '-'}</td>
                   <td>{v.bank || '-'}</td>
