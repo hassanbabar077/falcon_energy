@@ -169,6 +169,7 @@ export function PaymentReceived() {
                         <option value="Cheque">Cheque Deposit</option>
                         <option value="Online Payment">Online Transfer</option>
                         <option value="Pay Order">Pay Order</option>
+                        <option value="By Hand / Cash">By Hand / Cash</option>
                       </select>
                     </div>
                   </div>

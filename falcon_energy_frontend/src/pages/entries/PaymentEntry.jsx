@@ -310,6 +310,7 @@ export function PaymentEntry() {
                 <option value="Cheque">Cheque</option>
                 <option value="Online Payment">Online Transfer</option>
                 <option value="Pay Order">Pay Order / Demand Draft</option>
+                <option value="By Hand / Cash">By Hand / Cash</option>
               </select>
             </div>
             <div className="crud-form-field">

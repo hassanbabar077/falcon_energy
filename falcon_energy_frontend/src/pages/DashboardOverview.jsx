@@ -76,10 +76,10 @@ export function DashboardOverview({ onUpdateTrip, onNavigate }) {
       </div>
 
       <div className="dashboard-metrics">
-        <div className="dashboard-metric"><div><span>Active Fleet</span><strong>{kpis.activeVehicles}<small> / {kpis.totalVehicles}</small></strong><em><ShieldCheck size={14} /> Vehicles ready for dispatch</em></div><Truck /></div>
-        <div className="dashboard-metric"><div><span>In-Transit Deliveries</span><strong>{kpis.inprocessCount}<small> Trips</small></strong><em><Clock size={14} /> Pending delivery updates</em></div><Clock /></div>
-        <div className="dashboard-metric"><div><span>Gross Revenue</span><strong>PKR {(kpis.totalRevenue || 0).toLocaleString()}</strong><em><DollarSign size={14} /> Cumulative trip earnings</em></div><DollarSign /></div>
-        <div className="dashboard-metric"><div><span>Net Operational Profit</span><strong>PKR {(kpis.netProfit || 0).toLocaleString()}</strong><em><TrendingUp size={14} /> After operating costs</em></div><TrendingUp /></div>
+        <div className="dashboard-metric dashboard-metric--teal"><div><span>Active Fleet</span><strong>{kpis.activeVehicles}<small> / {kpis.totalVehicles}</small></strong><em><ShieldCheck size={14} /> Vehicles ready for dispatch</em></div><Truck /></div>
+        <div className="dashboard-metric dashboard-metric--amber"><div><span>In-Transit Deliveries</span><strong>{kpis.inprocessCount}<small> Trips</small></strong><em><Clock size={14} /> Pending delivery updates</em></div><Clock /></div>
+        <div className="dashboard-metric dashboard-metric--blue"><div><span>Gross Revenue</span><strong>PKR {(kpis.totalRevenue || 0).toLocaleString()}</strong><em><DollarSign size={14} /> Cumulative trip earnings</em></div><DollarSign /></div>
+        <div className="dashboard-metric dashboard-metric--green"><div><span>Net Operational Profit</span><strong>PKR {(kpis.netProfit || 0).toLocaleString()}</strong><em><TrendingUp size={14} /> After operating costs</em></div><TrendingUp /></div>
       </div>
 
       <div className="dashboard-summary-row">
