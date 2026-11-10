@@ -41,11 +41,12 @@ export const DRIVER_EXPENSE_FIELDS = [
 ].map(([key, label]) => ({ key, label }));
 
 // Parties that can receive a payment voucher (suppliers are non-financial)
-export const PAYABLE_CATEGORIES = ['Vendors', 'Workshops', 'Fuel Pumps', 'Drivers', 'Vehicles', 'Personal Expenses'];
+export const PAYABLE_CATEGORIES = ['Vendors', 'Workshops', 'Fuel Pumps', 'Transporters', 'Drivers', 'Vehicles', 'Personal Expenses'];
 
 const CATEGORY_NARRATION = {
   'Vendors': 'Vendor dues', 'Workshops': 'Workshop maintenance dues', 'Fuel Pumps': 'Fuel dues',
-  'Drivers': 'Driver payment', 'Vehicles': 'Vehicle payment', 'Personal Expenses': 'Personal expense'
+  'Transporters': 'Transporter dues', 'Drivers': 'Driver payment', 'Vehicles': 'Vehicle payment',
+  'Personal Expenses': 'Personal expense'
 };
 
 // Clean initial state with no dummy seed data
@@ -872,6 +873,10 @@ class DatabaseService {
         T('fuel_pumps').forEach(p => add(p.name));
         T('fuel_entries').forEach(f => add(f.fuel_pump));
         break;
+      case 'Transporters':
+        T('transporters').forEach(tr => add(tr.business_name || tr.name));
+        T('vehicles').forEach(v => add(v.transporter));
+        break;
       case 'Drivers':
         T('drivers').forEach(d => add(d.name));
         T('trips').forEach(t => add(t.driver));
@@ -935,7 +940,17 @@ class DatabaseService {
     const T = (t) => this.getTable(t);
 
     // ---- Charges ----
+    // Opening balances (derived from master fields — one charge per party, optional trip attribution)
     if (category === 'Vendors') {
+      T('vendors').forEach(v => {
+        const party = v.business_name || v.name;
+        if (toNum(v.opening_payable) <= 0 || !is(party)) return;
+        charge({
+          date: dateOf(v.createdAt) || todayISO(), ref: `${v.id || party}-OPEN`, party,
+          trip_id: v.opening_trip_id || '', amount: v.opening_payable,
+          description: 'Opening payable balance'
+        });
+      });
       T('tyres_record').forEach(t => {
         if (!is(t.vendor)) return;
         const veh = t.vehicle || t.tanker_number || '';
@@ -964,6 +979,15 @@ class DatabaseService {
     }
 
     if (category === 'Workshops') {
+      T('workshops').forEach(w => {
+        const party = w.name || w.business_name;
+        if (toNum(w.opening_payable) <= 0 || !is(party)) return;
+        charge({
+          date: dateOf(w.createdAt) || todayISO(), ref: `${w.id || party}-OPEN`, party,
+          trip_id: w.opening_trip_id || '', amount: w.opening_payable,
+          description: 'Opening payable balance'
+        });
+      });
       T('maintenance').forEach(m => {
         if (!is(m.workshop)) return;
         const veh = m.vehicle || m.tanker_number || '';
@@ -978,7 +1002,10 @@ class DatabaseService {
     if (category === 'Fuel Pumps') {
       T('fuel_pumps').forEach(p => {
         if (toNum(p.opening_payable) > 0 && is(p.name)) {
-          charge({ date: dateOf(p.createdAt), ref: p.id, party: p.name, amount: p.opening_payable, description: 'Opening payable balance' });
+          charge({
+            date: dateOf(p.createdAt), ref: p.id, party: p.name, amount: p.opening_payable,
+            trip_id: p.opening_trip_id || '', description: 'Opening payable balance'
+          });
         }
       });
       T('fuel_entries').forEach(f => {
@@ -990,6 +1017,18 @@ class DatabaseService {
           date: f.date || dateOf(f.createdAt), ref: f.id, party: f.fuel_pump, vehicle: f.vehicle || '', trip_id: f.trip_id || '',
           amount,
           description: `Fuel ${liters} L${rate ? ` @ ${rate}/L` : ''}${f.vehicle ? ` · ${f.vehicle}` : ''}${f.trip_id && f.trip_id !== '-' ? ` · ${f.trip_id}` : ''}`
+        });
+      });
+    }
+
+    if (category === 'Transporters') {
+      T('transporters').forEach(tr => {
+        const party = tr.business_name || tr.name;
+        if (toNum(tr.opening_payable) <= 0 || !is(party)) return;
+        charge({
+          date: dateOf(tr.createdAt) || todayISO(), ref: `${tr.id || party}-OPEN`, party,
+          trip_id: tr.opening_trip_id || '', amount: tr.opening_payable,
+          description: 'Opening payable balance'
         });
       });
     }
@@ -1006,6 +1045,15 @@ class DatabaseService {
     }
 
     if (category === 'Customers') {
+      T('customers').forEach(c => {
+        const party = c.name || c.business_name;
+        if (toNum(c.opening_receivable) <= 0 || !is(party)) return;
+        charge({
+          date: dateOf(c.createdAt) || todayISO(), ref: `${c.id || party}-OPEN`, party,
+          trip_id: c.opening_trip_id || '', amount: c.opening_receivable,
+          description: 'Opening receivable balance'
+        });
+      });
       T('trips').forEach(t => {
         const income = toNum(t.net_income) || toNum(t.total_cost);
         if (!t.unloading_date || income <= 0 || !is(t.customer)) return;
@@ -1091,7 +1139,10 @@ class DatabaseService {
   }
 
   _outstandingList(categories, { party = '' } = {}) {
-    const labels = { 'Vendors': 'Vendor', 'Workshops': 'Workshop', 'Fuel Pumps': 'Fuel Pump', 'Vehicles': 'Vehicle', 'Drivers': 'Driver', 'Customers': 'Customer' };
+    const labels = {
+      'Vendors': 'Vendor', 'Workshops': 'Workshop', 'Fuel Pumps': 'Fuel Pump',
+      'Transporters': 'Transporter', 'Vehicles': 'Vehicle', 'Drivers': 'Driver', 'Customers': 'Customer'
+    };
     const list = [];
     categories.forEach(cat => {
       this.getPartyListByCategory(cat).forEach(name => {
@@ -1116,10 +1167,58 @@ class DatabaseService {
     return list.sort((a, b) => b.remaining_amount - a.remaining_amount);
   }
 
-  // Everything the company still has to pay (vendors, workshops, fuel pumps, vehicle final dues)
+  // Everything the company still has to pay (vendors, workshops, fuel pumps, transporters, vehicle final dues)
   getPendingPayables(filters = {}) {
-    const cats = filters.category ? [filters.category] : ['Vendors', 'Workshops', 'Fuel Pumps', 'Vehicles'];
+    const cats = filters.category
+      ? [filters.category]
+      : ['Vendors', 'Workshops', 'Fuel Pumps', 'Transporters', 'Vehicles'];
     return this._outstandingList(cats, filters);
+  }
+
+  // Party openings attributed to a specific trip (ledger already includes openings once;
+  // this is for trip sheet display / cost attribution only)
+  getPartyOpeningsForTrip(tripId) {
+    const n = normText(tripId);
+    if (!n) return { payables: [], receivables: [], payableTotal: 0, receivableTotal: 0 };
+
+    const payables = [];
+    const receivables = [];
+    const pushPay = (category, party, amount, recordId) => {
+      const amt = round2(amount);
+      if (amt <= 0 || !party) return;
+      payables.push({ category, party, amount: amt, ref: recordId });
+    };
+
+    (this.data.vendors || []).forEach(v => {
+      if (normText(v.opening_trip_id) !== n) return;
+      pushPay('Vendors', v.business_name || v.name, v.opening_payable, v.id);
+    });
+    (this.data.workshops || []).forEach(w => {
+      if (normText(w.opening_trip_id) !== n) return;
+      pushPay('Workshops', w.name || w.business_name, w.opening_payable, w.id);
+    });
+    (this.data.fuel_pumps || []).forEach(p => {
+      if (normText(p.opening_trip_id) !== n) return;
+      pushPay('Fuel Pumps', p.name, p.opening_payable, p.id);
+    });
+    (this.data.transporters || []).forEach(tr => {
+      if (normText(tr.opening_trip_id) !== n) return;
+      pushPay('Transporters', tr.business_name || tr.name, tr.opening_payable, tr.id);
+    });
+    (this.data.customers || []).forEach(c => {
+      if (normText(c.opening_trip_id) !== n) return;
+      const amt = round2(c.opening_receivable);
+      const party = c.name || c.business_name;
+      if (amt <= 0 || !party) return;
+      receivables.push({ category: 'Customers', party, amount: amt, ref: c.id });
+    });
+
+    return {
+      payables,
+      receivables,
+      payableTotal: sumBy(payables, p => p.amount),
+      receivableTotal: sumBy(receivables, r => r.amount)
+    };
   }
 
   // Everything customers still have to pay us
@@ -1565,7 +1664,10 @@ class DatabaseService {
     const settlement = this.getTripSettlement(trip.id);
     const distance = toNum(trip.distance);
     const netIncome = toNum(trip.net_income) || toNum(trip.total_cost);
-    const totalTripCost = round2(settlement.expenseTotal + dieselExpense + mobilExpense);
+    const partyOpenings = this.getPartyOpeningsForTrip(trip.id);
+    // Openings attributed to this trip add to trip cost (payables only). Customer opening
+    // is shown separately and must NOT be merged into freight netIncome.
+    const totalTripCost = round2(settlement.expenseTotal + dieselExpense + mobilExpense + partyOpenings.payableTotal);
     const clean = (v) => (v && v !== '-' && v !== 'Pending' ? v : '—');
 
     return {
@@ -1601,11 +1703,14 @@ class DatabaseService {
         avgKmPerLiter: fuel.consumedLiters > 0 && distance > 0 ? distance / fuel.consumedLiters : 0
       },
       mobilOil: { amount: mobilExpense, liters: mobil.liters, fromUsage: mobil.count > 0 },
+      partyOpenings,
       settlement,
       totals: {
         roadExpenses: settlement.expenseTotal,
         diesel: dieselExpense,
         mobilOil: mobilExpense,
+        partyOpeningPayables: partyOpenings.payableTotal,
+        partyOpeningReceivables: partyOpenings.receivableTotal,
         totalTripCost,
         netIncome,
         tripMargin: round2(netIncome - totalTripCost)
@@ -1715,7 +1820,7 @@ class DatabaseService {
         raw.push({ ...r, category: 'Bank', party: r.account || 'Bank' });
       });
     }
-    ['Vendors', 'Workshops', 'Fuel Pumps', 'Vehicles', 'Customers'].forEach(cat => {
+    ['Vendors', 'Workshops', 'Fuel Pumps', 'Transporters', 'Vehicles', 'Customers'].forEach(cat => {
       if (filterCategory && filterCategory !== cat) return;
       this.getPartyLedger(cat, filterParty).rows.filter(r => !r.isOpening).forEach(r => raw.push({ ...r, category: cat }));
     });

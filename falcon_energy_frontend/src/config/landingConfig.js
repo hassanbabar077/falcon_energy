@@ -54,6 +54,7 @@ export const REPORTS_CARDS = [
   { id: 'rpt_vendor_ledger', label: 'Vendor Ledger', icon: BookOpen, description: 'Vendor bills, payments and running balance' },
   { id: 'rpt_workshop_ledger', label: 'Workshop Ledger', icon: Wrench, description: 'Maintenance bills, payments and workshop balances' },
   { id: 'rpt_fuel_pump_ledger', label: 'Fuel Pump Ledger', icon: Fuel, description: 'Fuel pump bills, payments and running balance' },
+  { id: 'rpt_transporter_ledger', label: 'Transporter Ledger', icon: Truck, description: 'Transporter opening payables, payments and running balance' },
   { id: 'rpt_vehicle_ledger', label: 'Vehicle Final Due Ledger', icon: Truck, description: 'Final dues payable to vehicles and their settlements' },
   { id: 'rpt_bank_ledger', label: 'Bank Ledger', icon: Landmark, description: 'Bank deposits, payments and running balance' },
   { id: 'rpt_cash_account_ledger', label: 'Cash Account Ledger', icon: Banknote, description: 'Cash inflows, outflows and running balance' },

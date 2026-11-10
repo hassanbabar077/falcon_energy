@@ -40,6 +40,11 @@ const config = {
         );
       }
     },
+    {
+      key: 'opening_payable',
+      label: 'Opening Payable',
+      format: 'currency'
+    },
     { 
       key: 'outstanding_balance', 
       label: 'Remaining Balance (PKR)', 
@@ -60,10 +65,15 @@ const config = {
     { key: 'contact_person', label: 'Contact Person', type: 'text', placeholder: 'e.g. Ustad Rashid', halfWidth: true },
     { key: 'phone', label: 'Contact Number', type: 'text', placeholder: 'e.g. 0300-4455667', required: true, halfWidth: true },
     { key: 'address', label: 'Address', type: 'text', placeholder: 'e.g. Multan Road, Lahore', required: true },
-    { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'], required: true },
+    { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Inactive'], required: true, halfWidth: true },
+    { key: 'opening_payable', label: 'Opening Payable (Optional)', type: 'number', halfWidth: true },
+    { key: 'opening_trip_id', label: 'Associate Opening to Trip (Optional)', type: 'all_trips_dropdown', halfWidth: true },
     { key: 'remarks', label: 'Remarks', type: 'textarea', placeholder: 'Workshop notes or specialty' },
   ],
-  defaultValues: { name: '', contact_person: '', phone: '', address: '', status: 'Active', remarks: '' },
+  defaultValues: {
+    name: '', contact_person: '', phone: '', address: '', status: 'Active',
+    opening_payable: '', opening_trip_id: '', remarks: ''
+  },
 };
 
 export function WorkshopMgmt() {

@@ -58,8 +58,9 @@ const config = {
     { key: 'location', label: 'Location', type: 'text', required: true, halfWidth: true },
     { key: 'phone', label: 'Contact Number', type: 'text', required: true, halfWidth: true },
     { key: 'opening_payable', label: 'Opening Payable (Optional)', type: 'number', halfWidth: true },
+    { key: 'opening_trip_id', label: 'Associate Opening to Trip (Optional)', type: 'all_trips_dropdown', halfWidth: true },
   ],
-  defaultValues: { name: '', location: '', phone: '', opening_payable: 0 },
+  defaultValues: { name: '', location: '', phone: '', opening_payable: 0, opening_trip_id: '' },
 };
 
 export function FuelPumpMgmt() {

@@ -21,6 +21,7 @@ const REPORTS = [
   { id: 'vendor_ledger', group: 'Ledgers', label: 'Vendor Ledger', filters: ['fromDate', 'toDate', 'vendor', 'vehicle'], orientation: 'portrait' },
   { id: 'workshop_ledger', group: 'Ledgers', label: 'Workshop Ledger', filters: ['fromDate', 'toDate', 'workshop', 'vehicle'], orientation: 'portrait' },
   { id: 'fuel_pump_ledger', group: 'Ledgers', label: 'Fuel Pump Ledger', filters: ['fromDate', 'toDate', 'pump', 'vehicle', 'trip'], orientation: 'portrait' },
+  { id: 'transporter_ledger', group: 'Ledgers', label: 'Transporter Ledger', filters: ['fromDate', 'toDate', 'transporter', 'vehicle'], orientation: 'portrait' },
   { id: 'vehicle_ledger', group: 'Ledgers', label: 'Vehicle Final Due Ledger', filters: ['fromDate', 'toDate', 'vehicle', 'trip'], orientation: 'portrait' },
   { id: 'bank_ledger', group: 'Ledgers', label: 'Bank Ledger', filters: ['fromDate', 'toDate', 'bank', 'txnType'], orientation: 'portrait' },
   { id: 'cash_account_ledger', group: 'Ledgers', label: 'Cash Account Ledger', filters: ['fromDate', 'toDate', 'cashHead'], orientation: 'portrait' },
@@ -38,11 +39,11 @@ const REPORTS = [
 ];
 
 // Older report ids still used by saved permissions / landing cards
-const REPORT_ALIASES = { fuel: 'fuel_pump_ledger', transporter_ledger: 'trips' };
+const REPORT_ALIASES = { fuel: 'fuel_pump_ledger' };
 
 const EMPTY_FILTERS = {
   fromDate: '', toDate: '', reportDate: '', vehicle: '', driver: '', trip: '', supplier: '', customer: '', vendor: '',
-  workshop: '', pump: '', bank: '', source: '', destination: '', head: '', brand: '', party: '', cashHead: '',
+  workshop: '', pump: '', transporter: '', bank: '', source: '', destination: '', head: '', brand: '', party: '', cashHead: '',
   payCategory: '', ledgerCategory: '', maintCategory: '', vehCategory: '', ownership: '', txnType: '', paymentType: '',
   tripStatus: '', paymentStatus: '', advanceStatus: '', vehStatus: '', driverStatus: '', tyreStatus: ''
 };
@@ -67,6 +68,7 @@ const FILTER_DEFS = {
   vendor: { label: 'Vendor', options: () => dbService.getPartyListByCategory('Vendors') },
   workshop: { label: 'Workshop', options: () => dbService.getPartyListByCategory('Workshops') },
   pump: { label: 'Fuel Pump', options: () => dbService.getPartyListByCategory('Fuel Pumps') },
+  transporter: { label: 'Transporter', options: () => dbService.getPartyListByCategory('Transporters') },
   bank: { label: 'Bank Account', options: () => names('bank_accounts', 'bank_name') },
   source: { label: 'Loading Source', options: () => names('trips', 'source') },
   destination: { label: 'Destination', options: () => names('trips', r => (r.destination === 'Pending' ? '' : r.destination)) },
@@ -74,8 +76,8 @@ const FILTER_DEFS = {
   brand: { label: 'Tyre Brand', options: () => names('tyres_record', 'brand') },
   party: { label: 'Party Name', type: 'text', placeholder: 'Exact party name' },
   cashHead: { label: 'Cash Head / Recipient', type: 'text', placeholder: 'e.g. Driver Advances' },
-  payCategory: { label: 'Party Category', options: () => ['Vendors', 'Workshops', 'Fuel Pumps', 'Vehicles', 'Drivers', 'Personal Expenses'] },
-  ledgerCategory: { label: 'Ledger Category', options: () => ['Bank', 'Vendors', 'Workshops', 'Fuel Pumps', 'Vehicles', 'Customers'] },
+  payCategory: { label: 'Party Category', options: () => ['Vendors', 'Workshops', 'Fuel Pumps', 'Transporters', 'Vehicles', 'Drivers', 'Personal Expenses'] },
+  ledgerCategory: { label: 'Ledger Category', options: () => ['Bank', 'Vendors', 'Workshops', 'Fuel Pumps', 'Transporters', 'Vehicles', 'Customers'] },
   maintCategory: { label: 'Category', options: () => ['Prime Mover', 'Tanker'] },
   vehCategory: { label: 'Vehicle Category', options: () => dbService.getLookupOptions('Vehicle Category') },
   ownership: { label: 'Ownership', options: () => ['Single Owner', 'Shared Owner'] },
@@ -130,6 +132,8 @@ function buildData(type, f) {
       return dbService.getPartyLedger('Workshops', f.workshop, f.fromDate, f.toDate, { vehicle: f.vehicle });
     case 'fuel_pump_ledger':
       return dbService.getPartyLedger('Fuel Pumps', f.pump, f.fromDate, f.toDate, ledgerOpts);
+    case 'transporter_ledger':
+      return dbService.getPartyLedger('Transporters', f.transporter, f.fromDate, f.toDate, { vehicle: f.vehicle });
     case 'vehicle_ledger':
       return dbService.getPartyLedger('Vehicles', f.vehicle, f.fromDate, f.toDate, { tripId: f.trip });
     case 'bank_ledger':
@@ -309,6 +313,34 @@ function tripSheetHTML(d, company) {
         </table>
       </section>
 
+      ${(() => {
+        const po = d.partyOpenings || { payables: [], receivables: [] };
+        const payRows = po.payables.length
+          ? po.payables.map((x, i) => `<tr><td>${i + 1}</td><td>${e(x.category)}</td><td>${e(x.party)}</td><td class="num">${m(x.amount)}</td></tr>`).join('')
+          : '<tr><td colspan="4" class="empty">None</td></tr>';
+        const recRows = po.receivables.length
+          ? po.receivables.map((x, i) => `<tr><td>${i + 1}</td><td>${e(x.party)}</td><td class="num">${m(x.amount)}</td></tr>`).join('')
+          : '<tr><td colspan="3" class="empty">None</td></tr>';
+        if (!po.payables.length && !po.receivables.length) return '';
+        return `
+      <section>
+        <h4>Party Openings Linked to This Trip</h4>
+        <p style="font-size:10.5px;color:#64748b;margin:0 0 8px">Ledger already includes these openings once. Shown here for trip cost / receivable attribution only.</p>
+        ${po.payables.length ? `
+        <table class="grid tight">
+          <thead><tr><th>#</th><th>Type</th><th>Party</th><th class="num">Payable</th></tr></thead>
+          <tbody>${payRows}</tbody>
+          <tfoot><tr><td colspan="3">Opening payables on trip</td><td class="num">${m(po.payableTotal)}</td></tr></tfoot>
+        </table>` : ''}
+        ${po.receivables.length ? `
+        <table class="grid tight" style="margin-top:8px">
+          <thead><tr><th>#</th><th>Customer</th><th class="num">Opening Receivable</th></tr></thead>
+          <tbody>${recRows}</tbody>
+          <tfoot><tr><td colspan="2">Opening receivables on trip</td><td class="num">${m(po.receivableTotal)}</td></tr></tfoot>
+        </table>` : ''}
+      </section>`;
+      })()}
+
       <section>
         <h4>Advance Account (${e(d.vehicleNo)})</h4>
         <table class="grid tight">
@@ -334,8 +366,10 @@ function tripSheetHTML(d, company) {
       <div><span>Trip Expenses</span><strong>${pkr(t.roadExpenses)}</strong></div>
       <div><span>Diesel</span><strong>${pkr(t.diesel)}</strong></div>
       <div><span>Mobil Oil</span><strong>${pkr(t.mobilOil)}</strong></div>
+      <div><span>Opening Payables</span><strong>${pkr(t.partyOpeningPayables || 0)}</strong></div>
       <div><span>Total Trip Cost</span><strong>${pkr(t.totalTripCost)}</strong></div>
-      <div><span>Net Income</span><strong>${pkr(t.netIncome)}</strong></div>
+      <div><span>Net Income (Freight)</span><strong>${pkr(t.netIncome)}</strong></div>
+      <div><span>Opening Receivables</span><strong>${pkr(t.partyOpeningReceivables || 0)}</strong></div>
       <div class="${t.tripMargin < 0 ? 'neg' : 'pos'}"><span>Trip Margin</span><strong>${pkr(t.tripMargin)}</strong></div>
     </div>
 
@@ -458,6 +492,7 @@ function buildBodyHTML(type, data, company) {
     case 'vendor_ledger':
     case 'workshop_ledger':
     case 'fuel_pump_ledger':
+    case 'transporter_ledger':
     case 'vehicle_ledger':
       return ledgerHTML(data, { showParty: !data.partyName || data.partyName.startsWith('All'), drLabel: 'Paid (Dr)', crLabel: 'Billed (Cr)', balanceLabel: 'Payable' });
     case 'bank_ledger':

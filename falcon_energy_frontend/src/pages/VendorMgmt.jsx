@@ -41,6 +41,11 @@ const config = {
         );
       }
     },
+    {
+      key: 'opening_payable',
+      label: 'Opening Payable',
+      format: 'currency'
+    },
     { 
       key: 'outstanding_balance', 
       label: 'Remaining Balance (PKR)', 
@@ -63,9 +68,14 @@ const config = {
     { key: 'phone', label: 'Contact Number', type: 'text', required: true, halfWidth: true },
     { key: 'email', label: 'Email Address', type: 'email', halfWidth: true },
     { key: 'address', label: 'Address', type: 'text' },
+    { key: 'opening_payable', label: 'Opening Payable (Optional)', type: 'number', halfWidth: true },
+    { key: 'opening_trip_id', label: 'Associate Opening to Trip (Optional)', type: 'all_trips_dropdown', halfWidth: true },
     { key: 'remarks', label: 'Remarks', type: 'textarea' },
   ],
-  defaultValues: { business_name: '', vendor_type: 'Spare Part', city: '', contact_person: '', phone: '', email: '', address: '', remarks: '' },
+  defaultValues: {
+    business_name: '', vendor_type: 'Spare Part', city: '', contact_person: '', phone: '', email: '',
+    address: '', opening_payable: '', opening_trip_id: '', remarks: ''
+  },
   onBeforeSave: (record) => {
     if (!record.name) {
       record.name = record.business_name;

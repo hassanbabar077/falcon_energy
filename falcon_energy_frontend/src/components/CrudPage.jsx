@@ -91,6 +91,24 @@ function FormField({ field, value, onChange, formData, vehicles, transporters, f
     );
   }
 
+  // All trips (for opening-balance attribution); optional, no vehicle filter
+  if (field.type === 'all_trips_dropdown') {
+    const list = [...(trips || [])].sort((a, b) =>
+      String(b.loading_date || '').localeCompare(String(a.loading_date || '')) ||
+      String(b.id || '').localeCompare(String(a.id || ''))
+    );
+    return (
+      <select value={value || ''} onChange={e => onChange(field.key, e.target.value)} className="crud-form-select" required={field.required}>
+        <option value="">No trip (ledger only)</option>
+        {list.map(t => (
+          <option key={t.id} value={t.id}>
+            {t.id} · {t.vehicle || '—'} · {t.source || 'Dispatch'} → {t.destination || 'Pending'} ({t.loading_date || '—'})
+          </option>
+        ))}
+      </select>
+    );
+  }
+
   if (field.type === 'tanker_dropdown') {
     // Filter vehicles that have a valid tanker number
     const tankers = vehicles.filter(v => v.tanker_number && v.tanker_number.trim() !== '');

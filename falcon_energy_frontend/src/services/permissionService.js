@@ -62,6 +62,7 @@ export const PERMISSION_MODULES = [
       { id: 'rpt_vendor_ledger', label: 'Vendor Ledger' },
       { id: 'rpt_workshop_ledger', label: 'Workshop Ledger' },
       { id: 'rpt_fuel_pump_ledger', label: 'Fuel Pump Ledger' },
+      { id: 'rpt_transporter_ledger', label: 'Transporter Ledger' },
       { id: 'rpt_vehicle_ledger', label: 'Vehicle Final Due Ledger' },
       { id: 'rpt_bank_ledger', label: 'Bank Ledger' },
       { id: 'rpt_cash_account_ledger', label: 'Cash Account Ledger' },

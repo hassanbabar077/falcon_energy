@@ -9,6 +9,7 @@ const CATEGORY_LABELS = {
   'Vendors': 'Vendors & Suppliers of Parts / Oil / Tyres',
   'Workshops': 'Workshops (Maintenance)',
   'Fuel Pumps': 'Fuel Pumps',
+  'Transporters': 'Transporters (Haulage Partners)',
   'Drivers': 'Drivers (Advance / Settlement)',
   'Vehicles': 'Vehicles (Advance / Settlement)',
   'Personal Expenses': 'Personal Expenses & Misc'
